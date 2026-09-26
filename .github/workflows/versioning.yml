@@ -1,0 +1,57 @@
+name: versioning
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: 'go.mod'
+          cache-dependency-path: |
+            go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+      - name: run go vet
+        run: go vet ./...
+
+      - name: run go test
+        id: test
+        run: go test -json ./... -count=1 -coverpkg=./... -coverprofile=coverage.out > test-results.json
+
+      - name: Publish Test Report
+        uses: robherley/go-test-action@v1
+        if: always()
+        with:
+          fromJSONFiles: test-results.json
+
+      - name: go build
+        run: go build ./...
+
+      - name: Cleanup temporary files
+        run: rm -f coverage.out test-results.json
+
+      - name: bump and tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          LATEST=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          NEW=v$(echo "$LATEST" | cut -d. -f1 | tr -d v).$(echo "$LATEST" | cut -d. -f2).$(($(echo "$LATEST" | cut -d. -f3)+1))
+          git tag "$NEW" && git push --tags
