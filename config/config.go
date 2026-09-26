@@ -32,6 +32,8 @@ type Config struct {
 	CertFile             string
 	KeyFileTLS           string
 	ConnStr              string
+	DBReadReplicaConnStr string
+	DBSchema             string
 	DBMaxConns           int32
 	DBMinConns           int32
 	DBMaxConnIdleTime    time.Duration
@@ -140,6 +142,14 @@ func loadDatabaseConfig(c *Config) error {
 	var err error
 	if c.ConnStr, err = envString("CONN_STR"); err != nil {
 		return err
+	}
+	c.DBReadReplicaConnStr = strings.TrimSpace(os.Getenv("DB_READ_REPLICA_CONN_STR"))
+	if c.DBSchema, err = envString("DB_SCHEMA"); err != nil {
+		return err
+	}
+	c.DBSchema = strings.TrimSpace(c.DBSchema)
+	if c.DBSchema == "" {
+		return errors.New("DB_SCHEMA must not be empty")
 	}
 	if c.DBMaxConns, err = envInt32("DB_MAX_CONNS"); err != nil {
 		return err

@@ -37,6 +37,7 @@ type File struct {
 type FileStore struct {
 	s3     *s3.Client
 	db     *pgxpool.Pool
+	readDB *pgxpool.Pool
 	bucket string
 }
 
@@ -165,7 +166,11 @@ func (fs *FileStore) Get(ctx context.Context, ownerID, fileID uuid.UUID) (*File,
 }
 
 func (fs *FileStore) List(ctx context.Context, ownerID uuid.UUID, folderID *uuid.UUID) ([]File, error) {
-	rows, err := fs.db.Query(ctx, `
+	readDB := fs.readDB
+	if readDB == nil {
+		readDB = fs.db
+	}
+	rows, err := readDB.Query(ctx, `
 		SELECT `+fileColumns+`
 		FROM files
 		WHERE owner_id = $1 AND folder_id IS NOT DISTINCT FROM $2

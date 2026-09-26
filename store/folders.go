@@ -32,7 +32,8 @@ type Folder struct {
 }
 
 type FolderStore struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	readDB *pgxpool.Pool
 }
 
 func scanFolder(row interface{ Scan(...any) error }) (*Folder, error) {
@@ -94,7 +95,11 @@ func (fs *FolderStore) Get(ctx context.Context, ownerID, folderID uuid.UUID) (*F
 }
 
 func (fs *FolderStore) List(ctx context.Context, ownerID uuid.UUID, parentID *uuid.UUID) ([]Folder, error) {
-	rows, err := fs.db.Query(ctx, `
+	readDB := fs.readDB
+	if readDB == nil {
+		readDB = fs.db
+	}
+	rows, err := readDB.Query(ctx, `
 		SELECT `+folderColumns+`
 		FROM folders
 		WHERE owner_id = $1 AND parent_id IS NOT DISTINCT FROM $2

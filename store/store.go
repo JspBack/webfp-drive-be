@@ -25,13 +25,15 @@ func New(cfg cfg.Config) *Store {
 	files := &FileStore{
 		s3:     clients.S3,
 		db:     clients.DB,
+		readDB: clients.ReadDB,
 		bucket: cfg.R2BucketName,
 	}
 
 	return &Store{
 		Files: files,
 		Folders: &FolderStore{
-			db: clients.DB,
+			db:     clients.DB,
+			readDB: clients.ReadDB,
 		},
 		Users: &UserStore{
 			db:              clients.DB,

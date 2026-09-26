@@ -14,9 +14,10 @@ import (
 )
 
 type Clients struct {
-	DB    *pgxpool.Pool
-	Redis *redis.Client
-	S3    *s3.Client
+	DB     *pgxpool.Pool
+	ReadDB *pgxpool.Pool
+	Redis  *redis.Client
+	S3     *s3.Client
 
 	bucket string
 }
@@ -27,15 +28,27 @@ func New(ctx context.Context, cfg config.Config) *Clients {
 		panic(fmt.Errorf("initialize PostgreSQL client: %w", err))
 	}
 
+	readDB, err := newReadReplica(ctx, cfg, db)
+	if err != nil {
+		db.Close()
+		panic(fmt.Errorf("initialize PostgreSQL read replica: %w", err))
+	}
+
 	cache, err := newCache(ctx, cfg)
 	if err != nil {
 		db.Close()
+		if readDB != db {
+			readDB.Close()
+		}
 		panic(fmt.Errorf("initialize Redis client: %w", err))
 	}
 
 	objectStore, err := newObjectStore(ctx, cfg)
 	if err != nil {
 		db.Close()
+		if readDB != db {
+			readDB.Close()
+		}
 		if closeErr := cache.Close(); closeErr != nil {
 			err = errors.Join(err, fmt.Errorf("close Redis client after initialization failure: %w", closeErr))
 		}
@@ -44,6 +57,7 @@ func New(ctx context.Context, cfg config.Config) *Clients {
 
 	return &Clients{
 		DB:     db,
+		ReadDB: readDB,
 		Redis:  cache,
 		S3:     objectStore,
 		bucket: cfg.R2BucketName,
@@ -54,6 +68,11 @@ func (c *Clients) HealthCheck(ctx context.Context) error {
 	if c.DB != nil {
 		if err := c.DB.Ping(ctx); err != nil {
 			return fmt.Errorf("healthcheck PostgreSQL: %w", err)
+		}
+	}
+	if c.ReadDB != nil && c.ReadDB != c.DB {
+		if err := c.ReadDB.Ping(ctx); err != nil {
+			return fmt.Errorf("healthcheck PostgreSQL read replica: %w", err)
 		}
 	}
 	if c.Redis != nil {
@@ -76,6 +95,9 @@ func (c *Clients) Close() error {
 	var errs []error
 	if c.DB != nil {
 		c.DB.Close()
+	}
+	if c.ReadDB != nil && c.ReadDB != c.DB {
+		c.ReadDB.Close()
 	}
 	if c.Redis != nil {
 		if err := c.Redis.Close(); err != nil {
