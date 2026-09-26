@@ -32,6 +32,7 @@ type Folder struct {
 }
 
 type FolderStore struct {
+	schemaTables
 	db     *pgxpool.Pool
 	readDB *pgxpool.Pool
 }
@@ -67,7 +68,7 @@ func (fs *FolderStore) Create(ctx context.Context, ownerID uuid.UUID, parentID *
 		return nil, errors.New("folder name is required")
 	}
 	folder, err := scanFolder(fs.db.QueryRow(ctx, `
-		INSERT INTO folders (id, owner_id, parent_id, name)
+		INSERT INTO `+fs.table("folders")+` (id, owner_id, parent_id, name)
 		VALUES ($1, $2, $3, $4)
 		RETURNING `+folderColumns,
 		uuid.New(), ownerID, parentID, name,
@@ -83,7 +84,7 @@ func (fs *FolderStore) Create(ctx context.Context, ownerID uuid.UUID, parentID *
 
 func (fs *FolderStore) Get(ctx context.Context, ownerID, folderID uuid.UUID) (*Folder, error) {
 	folder, err := scanFolder(fs.db.QueryRow(ctx, `
-		SELECT `+folderColumns+` FROM folders WHERE id = $1 AND owner_id = $2
+		SELECT `+folderColumns+` FROM `+fs.table("folders")+` WHERE id = $1 AND owner_id = $2
 	`, folderID, ownerID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -101,7 +102,7 @@ func (fs *FolderStore) List(ctx context.Context, ownerID uuid.UUID, parentID *uu
 	}
 	rows, err := readDB.Query(ctx, `
 		SELECT `+folderColumns+`
-		FROM folders
+		FROM `+fs.table("folders")+`
 		WHERE owner_id = $1 AND parent_id IS NOT DISTINCT FROM $2
 		ORDER BY name
 	`, ownerID, parentID)
@@ -152,10 +153,10 @@ func (fs *FolderStore) Update(
 			var createsCycle bool
 			cycleErr := tx.QueryRow(ctx, `
 				WITH RECURSIVE descendants(id) AS (
-					SELECT id FROM folders WHERE id = $1 AND owner_id = $2
+					SELECT id FROM `+fs.table("folders")+` WHERE id = $1 AND owner_id = $2
 					UNION
 					SELECT child.id
-					FROM folders child
+					FROM `+fs.table("folders")+` child
 					JOIN descendants parent ON child.parent_id = parent.id
 					WHERE child.owner_id = $2
 				)
@@ -170,7 +171,7 @@ func (fs *FolderStore) Update(
 		}
 		var updateErr error
 		folder, updateErr = scanFolder(tx.QueryRow(ctx, `
-			UPDATE folders
+			UPDATE `+fs.table("folders")+`
 			SET name = CASE WHEN $3 THEN $4::text ELSE name END,
 				parent_id = CASE WHEN $5 THEN $6::uuid ELSE parent_id END,
 				updated_at = now()
@@ -197,10 +198,10 @@ func (fs *FolderStore) Update(
 
 func (fs *FolderStore) Delete(ctx context.Context, ownerID, folderID uuid.UUID) error {
 	tag, err := fs.db.Exec(ctx, `
-		DELETE FROM folders f
+		DELETE FROM `+fs.table("folders")+` f
 		WHERE f.id = $1 AND f.owner_id = $2
-			AND NOT EXISTS (SELECT 1 FROM folders child WHERE child.parent_id = f.id)
-			AND NOT EXISTS (SELECT 1 FROM files file WHERE file.folder_id = f.id)
+			AND NOT EXISTS (SELECT 1 FROM `+fs.table("folders")+` child WHERE child.parent_id = f.id)
+			AND NOT EXISTS (SELECT 1 FROM `+fs.table("files")+` file WHERE file.folder_id = f.id)
 	`, folderID, ownerID)
 	if err != nil {
 		return fmt.Errorf("delete folder: %w", err)

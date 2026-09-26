@@ -60,7 +60,7 @@ func (req *updateFileRequest) UnmarshalJSON(data []byte) error {
 // @Failure      400        {object}  map[string]string
 // @Failure      401        {object}  map[string]string
 // @Failure      404        {object}  map[string]string  "Folder not found"
-// @Failure      413        {object}  map[string]string  "File exceeds configured limit"
+// @Failure      413        {object}  map[string]string  "File exceeds configured limit or storage quota"
 // @Failure      500        {object}  map[string]string
 // @Router       /api/v1/files [post].
 func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
@@ -105,6 +105,12 @@ func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, store.ErrFolderNotFound) {
 			httphelper.Error(w, http.StatusNotFound, "folder not found")
+			return
+		}
+		if errors.Is(err, store.ErrStorageLimitExceeded) {
+			limit := h.store.Files.StorageLimit()
+			httphelper.Error(w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("storage limit exceeded: this file would pass your %d byte limit", limit))
 			return
 		}
 		h.internalError(w, r, "create file upload", err)

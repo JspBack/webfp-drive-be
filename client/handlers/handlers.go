@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	authhelper "github.com/JspBack/webfp-drive/helper/auth"
 	httphelper "github.com/JspBack/webfp-drive/helper/http"
 	"github.com/JspBack/webfp-drive/store"
 )
@@ -16,6 +17,7 @@ type Handler struct {
 	maxRequestBodyBytes int64
 	publicHost          string
 	publicScheme        string
+	githubOAuth         *authhelper.GitHubOAuth
 }
 
 func New(
@@ -24,6 +26,7 @@ func New(
 	maxFileSize, maxRequestBodyBytes int64,
 	publicHost string,
 	useTLS bool,
+	githubOAuth *authhelper.GitHubOAuth,
 ) *Handler {
 	scheme := "http"
 	if useTLS {
@@ -36,6 +39,7 @@ func New(
 		maxRequestBodyBytes: maxRequestBodyBytes,
 		publicHost:          publicHost,
 		publicScheme:        scheme,
+		githubOAuth:         githubOAuth,
 	}
 }
 

@@ -15,12 +15,15 @@ func TestLoadApplicationConfig(t *testing.T) {
 		"MAX_FILE_SIZE": "52428800", "MAX_REQUEST_BODY_BYTES": "1048576",
 		"SHUTDOWN_TIMEOUT": "5s", "ACCESS_TOKEN_LIFETIME": "10m",
 		"REFRESH_TOKEN_LIFETIME": "24h", "PUBLIC_HOST": "drive.example.com:8443",
-		"CERT_FILE": "", "KEY_FILE_TLS": "",
+		"CERT_FILE": "", "KEY_FILE_TLS": "", "USER_STORAGE_LIMIT_BYTES": "",
 	})
 
 	var got Config
 	if err := loadApplicationConfig(&got); err != nil {
 		t.Fatalf("loadApplicationConfig() error = %v", err)
+	}
+	if got.UserStorageLimitBytes != DefaultUserStorageLimitBytes {
+		t.Errorf("UserStorageLimitBytes = %d, want default %d", got.UserStorageLimitBytes, DefaultUserStorageLimitBytes)
 	}
 	if got.LogLevel != slog.LevelDebug || got.Port != 8081 || got.PublicHost != "drive.example.com:8443" {
 		t.Errorf("unexpected application settings: %+v", got)
@@ -56,6 +59,32 @@ func TestLoadApplicationConfigRejectsInvalidValues(t *testing.T) {
 				t.Fatal("loadApplicationConfig() succeeded, want error")
 			}
 		})
+	}
+}
+
+func TestLoadApplicationConfigStorageLimit(t *testing.T) {
+	setEnv(t, map[string]string{
+		"LOG_LEVEL": "info", "PORT": "8080", "TIMEOUT": "15s",
+		"TRANSFER_TIMEOUT": "30m", "RATE_LIMIT": "100", "RATE_WINDOW": "1m",
+		"MAX_FILE_SIZE": "52428800", "MAX_REQUEST_BODY_BYTES": "1048576",
+		"SHUTDOWN_TIMEOUT": "5s", "ACCESS_TOKEN_LIFETIME": "10m",
+		"REFRESH_TOKEN_LIFETIME": "24h", "PUBLIC_HOST": "",
+		"CERT_FILE": "", "KEY_FILE_TLS": "",
+		"USER_STORAGE_LIMIT_BYTES": " 1048576 ",
+	})
+	var got Config
+	if err := loadApplicationConfig(&got); err != nil {
+		t.Fatalf("loadApplicationConfig() error = %v", err)
+	}
+	if got.UserStorageLimitBytes != 1_048_576 {
+		t.Errorf("UserStorageLimitBytes = %d, want 1048576", got.UserStorageLimitBytes)
+	}
+
+	for _, invalid := range []string{"0", "-5", "many"} {
+		t.Setenv("USER_STORAGE_LIMIT_BYTES", invalid)
+		if err := loadApplicationConfig(&Config{}); err == nil {
+			t.Errorf("loadApplicationConfig() succeeded for USER_STORAGE_LIMIT_BYTES=%q", invalid)
+		}
 	}
 }
 
@@ -112,11 +141,67 @@ func TestLoadRedisAndR2Config(t *testing.T) {
 	}
 }
 
+func TestLoadAuthConfig(t *testing.T) {
+	setEnv(t, map[string]string{
+		"GITHUB_CLIENT_ID": "client-id", "GITHUB_CLIENT_SECRET": "client-secret",
+		"OAUTH_RETURN_URL": "http://localhost:5173/auth/callback",
+	})
+
+	var got Config
+	if err := loadAuthConfig(&got); err != nil {
+		t.Fatalf("loadAuthConfig() error = %v", err)
+	}
+	if got.GitHubClientID != "client-id" || got.GitHubClientSecret != "client-secret" ||
+		got.OAuthReturnURL != "http://localhost:5173/auth/callback" {
+		t.Errorf("unexpected auth settings: %+v", got)
+	}
+}
+
+func TestLoadAuthConfigDisabledWithoutClientID(t *testing.T) {
+	setEnv(t, map[string]string{
+		"GITHUB_CLIENT_ID": "", "GITHUB_CLIENT_SECRET": "client-secret",
+		"OAUTH_RETURN_URL": "",
+	})
+
+	var got Config
+	if err := loadAuthConfig(&got); err != nil {
+		t.Fatalf("loadAuthConfig() error = %v, want GitHub sign-in to stay disabled", err)
+	}
+	if got.GitHubClientID != "" {
+		t.Errorf("GitHubClientID = %q, want empty", got.GitHubClientID)
+	}
+}
+
+func TestLoadAuthConfigRejectsIncompleteGitHubOAuth(t *testing.T) {
+	tests := []struct {
+		name      string
+		id        string
+		secret    string
+		returnURL string
+	}{
+		{"missing secret", "client-id", "", "http://localhost:5173/auth/callback"},
+		{"missing return", "client-id", "client-secret", ""},
+		{"relative return", "client-id", "client-secret", "/auth/callback"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setEnv(t, map[string]string{
+				"GITHUB_CLIENT_ID":     test.id,
+				"GITHUB_CLIENT_SECRET": test.secret,
+				"OAUTH_RETURN_URL":     test.returnURL,
+			})
+			if err := loadAuthConfig(&Config{}); err == nil {
+				t.Fatal("loadAuthConfig() succeeded, want error")
+			}
+		})
+	}
+}
+
 func TestValidateConfig(t *testing.T) {
 	valid := Config{
 		Timeout: time.Millisecond, TransferTimeout: time.Millisecond, ShutdownTimeout: time.Millisecond,
 		AccessTokenLifetime: time.Millisecond, RefreshTokenLifetime: time.Millisecond,
-		MaxFileSize: 10, MaxRequestBodyBytes: 5,
+		MaxFileSize: 10, MaxRequestBodyBytes: 5, UserStorageLimitBytes: DefaultUserStorageLimitBytes,
 	}
 	if err := validateConfig(&valid); err != nil {
 		t.Fatalf("validateConfig(valid) error = %v", err)
@@ -133,6 +218,7 @@ func TestValidateConfig(t *testing.T) {
 		{"zero access lifetime", func(c *Config) { c.AccessTokenLifetime = 0 }},
 		{"zero refresh lifetime", func(c *Config) { c.RefreshTokenLifetime = 0 }},
 		{"zero file limit", func(c *Config) { c.MaxFileSize = 0 }},
+		{"zero storage limit", func(c *Config) { c.UserStorageLimitBytes = 0 }},
 		{"unsafe combined limit", func(c *Config) {
 			c.MaxFileSize = int64(^uint64(0)>>1) - 1
 			c.MaxRequestBodyBytes = 2

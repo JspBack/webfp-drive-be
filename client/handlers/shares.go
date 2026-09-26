@@ -426,6 +426,65 @@ func (h *Handler) renderSharePasswordPage(w http.ResponseWriter, status int, tok
 	}
 }
 
+type shareListItemResponse struct {
+	ID            string    `json:"id"`
+	FileID        string    `json:"file_id"`
+	Filename      string    `json:"filename"`
+	URL           string    `json:"url"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	MaxDownloads  int64     `json:"max_downloads"`
+	DownloadCount int64     `json:"download_count"`
+	HasPassword   bool      `json:"has_password"`
+}
+
+// ListShares godoc
+// @Summary      List share links
+// @Description  Lists the current user's active share links with their public URLs.
+// @Tags         shares
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {array}   shareListItemResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/shares [get].
+func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authhelper.AuthenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	host := h.publicHost
+	if host == "" {
+		host = r.Host
+	}
+	shares, err := h.store.Shares.ListShares(r.Context(), userID)
+	if err != nil {
+		h.internalError(w, r, "list shares", err)
+		return
+	}
+	items := make([]shareListItemResponse, 0, len(shares))
+	for _, share := range shares {
+		if share.Token == "" {
+			continue
+		}
+		shareURL, urlErr := httphelper.AbsoluteURL(h.publicScheme, host, "/api/v1/shares/"+share.Token)
+		if urlErr != nil {
+			h.internalError(w, r, "build public share URL", urlErr)
+			return
+		}
+		items = append(items, shareListItemResponse{
+			ID:            share.ID.String(),
+			FileID:        share.FileID.String(),
+			Filename:      share.Filename,
+			URL:           shareURL,
+			ExpiresAt:     share.ExpiresAt,
+			MaxDownloads:  share.MaxDownloads,
+			DownloadCount: share.DownloadCount,
+			HasPassword:   share.HasPassword,
+		})
+	}
+	httphelper.JSON(w, http.StatusOK, items)
+}
+
 // RevokeShare godoc
 // @Summary   Revoke a share link
 // @Tags      shares

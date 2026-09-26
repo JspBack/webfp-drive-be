@@ -10,7 +10,10 @@ import (
 )
 
 func (c *Client) registerRoutes(mux *http.ServeMux) {
-	h := handlers.New(c.Store, c.log, c.MaxFileSize, c.MaxRequestBodyBytes, c.publicHost, c.UseTLS())
+	h := handlers.New(
+		c.Store, c.log, c.MaxFileSize, c.MaxRequestBodyBytes,
+		c.publicHost, c.UseTLS(), c.githubOAuth,
+	)
 	mux.Handle("GET /swagger", http.RedirectHandler("/swagger/index.html", http.StatusTemporaryRedirect))
 	mux.Handle("GET /swagger/", httpSwagger.Handler(
 		httpSwagger.URL("/swagger/doc.json"),
@@ -28,9 +31,12 @@ func (c *Client) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/health", h.Health)
 	mux.HandleFunc("POST /api/v1/auth/register", h.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", h.Login)
+	mux.HandleFunc("GET /api/v1/auth/github", h.LoginGitHub)
+	mux.HandleFunc("GET /api/v1/callback", h.GitHubCallback)
 	mux.HandleFunc("POST /api/v1/auth/refresh", h.Refresh)
 	mux.Handle("POST /api/v1/auth/logout", h.RequireSession(http.HandlerFunc(h.Logout)))
 	mux.Handle("GET /api/v1/users/me", h.RequireSession(http.HandlerFunc(h.GetUser)))
+	mux.Handle("GET /api/v1/users/me/usage", h.RequireSession(http.HandlerFunc(h.StorageUsage)))
 	mux.Handle("PATCH /api/v1/users/me", h.RequireSession(http.HandlerFunc(h.UpdateUser)))
 	mux.Handle("POST /api/v1/files", h.RequireSession(http.HandlerFunc(h.CreateFile)))
 	mux.Handle("GET /api/v1/files", h.RequireSession(http.HandlerFunc(h.ListFiles)))
@@ -44,6 +50,7 @@ func (c *Client) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/v1/folders/{id}", h.RequireSession(http.HandlerFunc(h.UpdateFolder)))
 	mux.Handle("DELETE /api/v1/folders/{id}", h.RequireSession(http.HandlerFunc(h.DeleteFolder)))
 	mux.Handle("POST /api/v1/files/{id}/shares", h.RequireSession(http.HandlerFunc(h.CreateShare)))
+	mux.Handle("GET /api/v1/shares", h.RequireSession(http.HandlerFunc(h.ListShares)))
 	mux.Handle("DELETE /api/v1/shares/{id}", h.RequireSession(http.HandlerFunc(h.RevokeShare)))
 	mux.HandleFunc("GET /api/v1/shares/{token}", h.DownloadSharedFile)
 	mux.HandleFunc("POST /api/v1/shares/{token}/download", h.SubmitSharePassword)

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/JspBack/webfp-drive/config"
+	authhelper "github.com/JspBack/webfp-drive/helper/auth"
 	"github.com/JspBack/webfp-drive/store"
 )
 
@@ -29,6 +30,7 @@ type Client struct {
 	MaxRequestBodyBytes int64
 	ShutdownTimeout     time.Duration
 	publicHost          string
+	githubOAuth         *authhelper.GitHubOAuth
 
 	tlsConfig  *tls.Config
 	certFile   string
@@ -71,12 +73,34 @@ func New(cfg config.Config, logger *slog.Logger) *Client {
 		MaxRequestBodyBytes: cfg.MaxRequestBodyBytes,
 		ShutdownTimeout:     cfg.ShutdownTimeout,
 		publicHost:          cfg.PublicHost,
+		githubOAuth:         newGitHubOAuth(cfg),
 		tlsConfig:           tlsConfig,
 		certFile:            cfg.CertFile,
 		keyFileTLS:          cfg.KeyFileTLS,
 	}
 
 	return c
+}
+
+func newGitHubOAuth(cfg config.Config) *authhelper.GitHubOAuth {
+	if cfg.GitHubClientID == "" {
+		return nil
+	}
+	return authhelper.NewGitHubOAuth(
+		cfg.GitHubClientID, cfg.GitHubClientSecret, oauthRedirectURL(cfg), cfg.OAuthReturnURL,
+	)
+}
+
+func oauthRedirectURL(cfg config.Config) string {
+	scheme := "http"
+	if cfg.CertFile != "" && cfg.KeyFileTLS != "" {
+		scheme = "https"
+	}
+	host := cfg.PublicHost
+	if host == "" {
+		host = fmt.Sprintf("localhost:%d", cfg.Port)
+	}
+	return scheme + "://" + host + "/api/v1/callback"
 }
 
 func (c *Client) UseTLS() bool {

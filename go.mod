@@ -15,6 +15,7 @@ require (
 	github.com/swaggo/http-swagger v1.3.4
 	github.com/swaggo/swag v1.8.1
 	golang.org/x/crypto v0.41.0
+	golang.org/x/oauth2 v0.37.0
 )
 
 require (

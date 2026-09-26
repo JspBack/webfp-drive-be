@@ -16,7 +16,7 @@ import (
 )
 
 func testHandler() *handlers.Handler {
-	return handlers.New(nil, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1024, 1024, "", false)
+	return handlers.New(nil, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1024, 1024, "", false, nil)
 }
 
 func authenticatedRequest(method, target, body string) *http.Request {
@@ -123,6 +123,61 @@ func TestShareHandlersRejectInvalidRequests(t *testing.T) {
 	request.SetPathValue("token", "share-token")
 	request.Header.Set("Content-Type", "text/plain")
 	assertStatus(t, h.SubmitSharePassword, request, http.StatusBadRequest)
+}
+
+func TestGitHubAuthRequiresConfiguration(t *testing.T) {
+	h := testHandler()
+	assertStatus(t, h.LoginGitHub, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusServiceUnavailable)
+	assertStatus(t, h.GitHubCallback, httptest.NewRequest(http.MethodGet, "/?code=x&state=y", nil), http.StatusServiceUnavailable)
+}
+
+func TestLoginGitHubRedirectsToGitHub(t *testing.T) {
+	h := configuredGitHubHandler()
+	recorder := httptest.NewRecorder()
+	h.LoginGitHub(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("LoginGitHub() status = %d, want %d", recorder.Code, http.StatusTemporaryRedirect)
+	}
+	location := recorder.Header().Get("Location")
+	if !strings.HasPrefix(location, "https://github.com/login/oauth/authorize?") ||
+		!strings.Contains(location, "client_id=client-id") ||
+		!strings.Contains(location, "state=") {
+		t.Errorf("LoginGitHub() Location = %q, want a GitHub authorize URL with state", location)
+	}
+	cookies := recorder.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "webfp_github_state" || cookies[0].Value == "" {
+		t.Errorf("LoginGitHub() cookies = %+v, want a single non-empty state cookie", cookies)
+	}
+}
+
+func TestGitHubCallbackRejectsMismatchedState(t *testing.T) {
+	h := configuredGitHubHandler()
+	request := httptest.NewRequest(http.MethodGet, "/callback?code=code&state=other", nil)
+	request.AddCookie(&http.Cookie{Name: "webfp_github_state", Value: "expected"})
+	recorder := httptest.NewRecorder()
+
+	h.GitHubCallback(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("GitHubCallback() status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+	if location := recorder.Header().Get("Location"); !strings.Contains(location, "error=") {
+		t.Errorf("GitHubCallback() Location = %q, want an error redirect", location)
+	}
+}
+
+func configuredGitHubHandler() *handlers.Handler {
+	return handlers.New(
+		nil,
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		1024, 1024, "", false,
+		authhelper.NewGitHubOAuth(
+			"client-id", "client-secret",
+			"http://localhost:8080/callback",
+			"http://localhost:5173/auth/callback",
+		),
+	)
 }
 
 func TestRequireSessionRejectsMissingBearerToken(t *testing.T) {

@@ -16,37 +16,43 @@ import (
 
 var Version = "placeholder"
 
+const DefaultUserStorageLimitBytes int64 = 500 * 1024 * 1024
+
 type Config struct {
-	LogLevel             slog.Level
-	Port                 int
-	Timeout              time.Duration
-	TransferTimeout      time.Duration
-	RateLimit            int
-	RateWindow           time.Duration
-	MaxFileSize          int64
-	MaxRequestBodyBytes  int64
-	ShutdownTimeout      time.Duration
-	AccessTokenLifetime  time.Duration
-	RefreshTokenLifetime time.Duration
-	PublicHost           string
-	CertFile             string
-	KeyFileTLS           string
-	ConnStr              string
-	DBReadReplicaConnStr string
-	DBSchema             string
-	DBMaxConns           int32
-	DBMinConns           int32
-	DBMaxConnIdleTime    time.Duration
-	DBMaxConnLifetime    time.Duration
-	RedisURL             string
-	RedisPoolSize        int
-	RedisMinIdleConns    int
-	RedisPoolTimeout     time.Duration
-	RedisConnMaxIdleTime time.Duration
-	R2AccountID          string
-	R2BucketName         string
-	R2AccessKeyID        string
-	R2SecretAccessKey    string
+	LogLevel              slog.Level
+	Port                  int
+	Timeout               time.Duration
+	TransferTimeout       time.Duration
+	RateLimit             int
+	RateWindow            time.Duration
+	MaxFileSize           int64
+	MaxRequestBodyBytes   int64
+	UserStorageLimitBytes int64
+	ShutdownTimeout       time.Duration
+	AccessTokenLifetime   time.Duration
+	RefreshTokenLifetime  time.Duration
+	PublicHost            string
+	CertFile              string
+	KeyFileTLS            string
+	ConnStr               string
+	DBReadReplicaConnStr  string
+	DBSchema              string
+	DBMaxConns            int32
+	DBMinConns            int32
+	DBMaxConnIdleTime     time.Duration
+	DBMaxConnLifetime     time.Duration
+	RedisURL              string
+	RedisPoolSize         int
+	RedisMinIdleConns     int
+	RedisPoolTimeout      time.Duration
+	RedisConnMaxIdleTime  time.Duration
+	R2AccountID           string
+	R2BucketName          string
+	R2AccessKeyID         string
+	R2SecretAccessKey     string
+	GitHubClientID        string
+	GitHubClientSecret    string
+	OAuthReturnURL        string
 }
 
 func Parse() (*Config, error) {
@@ -81,6 +87,9 @@ func Parse() (*Config, error) {
 	if err := loadR2Config(c); err != nil {
 		return nil, err
 	}
+	if err := loadAuthConfig(c); err != nil {
+		return nil, err
+	}
 
 	if err := validateConfig(c); err != nil {
 		return nil, err
@@ -112,6 +121,9 @@ func loadApplicationConfig(c *Config) error {
 		return err
 	}
 	if c.MaxRequestBodyBytes, err = envInt64("MAX_REQUEST_BODY_BYTES"); err != nil {
+		return err
+	}
+	if c.UserStorageLimitBytes, err = envInt64Default("USER_STORAGE_LIMIT_BYTES", DefaultUserStorageLimitBytes); err != nil {
 		return err
 	}
 	if c.ShutdownTimeout, err = envDuration("SHUTDOWN_TIMEOUT"); err != nil {
@@ -203,6 +215,33 @@ func loadR2Config(c *Config) error {
 	return nil
 }
 
+func loadAuthConfig(c *Config) error {
+	c.GitHubClientID = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_ID"))
+	c.GitHubClientSecret = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET"))
+	c.OAuthReturnURL = strings.TrimSpace(os.Getenv("OAUTH_RETURN_URL"))
+	if c.GitHubClientID == "" {
+		return nil
+	}
+	if c.GitHubClientSecret == "" {
+		return errors.New("GITHUB_CLIENT_SECRET is required when GITHUB_CLIENT_ID is set")
+	}
+	if err := validateAbsoluteURL(c.OAuthReturnURL); err != nil {
+		return fmt.Errorf("OAUTH_RETURN_URL: %w", err)
+	}
+	return nil
+}
+
+func validateAbsoluteURL(value string) error {
+	if value == "" {
+		return errors.New("must be set")
+	}
+	parsed, err := url.ParseRequestURI(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("must be an absolute http(s) URL")
+	}
+	return nil
+}
+
 func validateConfig(c *Config) error {
 	if c.MaxRequestBodyBytes <= 0 {
 		return errors.New("MAX_REQUEST_BODY_BYTES must be positive")
@@ -215,6 +254,9 @@ func validateConfig(c *Config) error {
 	if c.MaxFileSize <= 0 || c.MaxRequestBodyBytes <= 0 ||
 		c.MaxFileSize > int64(^uint64(0)>>1)-c.MaxRequestBodyBytes {
 		return errors.New("MAX_FILE_SIZE and MAX_REQUEST_BODY_BYTES must be positive and have a safe combined limit")
+	}
+	if c.UserStorageLimitBytes <= 0 {
+		return errors.New("USER_STORAGE_LIMIT_BYTES must be positive")
 	}
 	return nil
 }
@@ -259,6 +301,21 @@ func envInt64(key string) (int64, error) {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func envInt64Default(key string, fallback int64) (int64, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be positive", key)
 	}
 	return parsed, nil
 }

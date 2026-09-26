@@ -268,6 +268,39 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, user)
 }
 
+type storageUsageResponse struct {
+	UsedBytes  int64 `json:"used_bytes"`
+	LimitBytes int64 `json:"limit_bytes"`
+	FileCount  int64 `json:"file_count"`
+}
+
+// StorageUsage godoc
+// @Summary      Get storage usage
+// @Description  Reports the current user's stored bytes, file count, and storage quota.
+// @Tags         users
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  storageUsageResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/users/me/usage [get].
+func (h *Handler) StorageUsage(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authhelper.AuthenticatedUserID(w, r)
+	if !ok {
+		return
+	}
+	usedBytes, fileCount, err := h.store.Files.Usage(r.Context(), userID)
+	if err != nil {
+		h.internalError(w, r, "get storage usage", err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, storageUsageResponse{
+		UsedBytes:  usedBytes,
+		LimitBytes: h.store.Files.StorageLimit(),
+		FileCount:  fileCount,
+	})
+}
+
 func (h *Handler) internalError(w http.ResponseWriter, r *http.Request, operation string, err error) {
 	h.logger.ErrorContext(r.Context(), operation, "error", err)
 	httphelper.Error(w, http.StatusInternalServerError, "internal server error")

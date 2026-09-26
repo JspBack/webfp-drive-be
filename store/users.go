@@ -73,6 +73,7 @@ type User struct {
 }
 
 type UserStore struct {
+	schemaTables
 	db              *pgxpool.Pool
 	cache           *redis.Client
 	accessLifetime  time.Duration
@@ -85,8 +86,8 @@ func (us *UserStore) Authenticate(ctx context.Context, email, password string) (
 	var passwordHash string
 	err := us.db.QueryRow(ctx, `
 		SELECT u.id, u.email, u.name, u.created_at, u.updated_at, a.password_hash
-		FROM users u
-		JOIN auth_identities a ON a.user_id = u.id
+		FROM `+us.table("users")+` u
+		JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
 		WHERE a.provider = 'password' AND a.provider_subject = $1
 	`, email).Scan(
 		&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt, &passwordHash,
@@ -99,6 +100,88 @@ func (us *UserStore) Authenticate(ctx context.Context, email, password string) (
 	}
 	if compareErr := bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)); compareErr != nil {
 		return nil, ErrInvalidCreds
+	}
+	return user, nil
+}
+
+func (us *UserStore) LoginGitHub(ctx context.Context, subject, email, name string) (*User, error) {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return nil, errors.New("github subject is required")
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	name = strings.TrimSpace(name)
+
+	user := &User{}
+	err := withTransaction(ctx, us.db, "GitHub user login", func(tx pgx.Tx) error {
+		lookupErr := tx.QueryRow(ctx, `
+			SELECT u.id, COALESCE(u.email, ''), u.name, u.created_at, u.updated_at
+			FROM `+us.table("users")+` u
+			JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
+			WHERE a.provider = 'github' AND a.provider_subject = $1
+		`, subject).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+		if lookupErr == nil {
+			return nil
+		}
+		if !errors.Is(lookupErr, pgx.ErrNoRows) {
+			return fmt.Errorf("find GitHub identity: %w", lookupErr)
+		}
+
+		user.ID = uuid.New()
+		user.Email = email
+		user.Name = name
+		if createErr := tx.QueryRow(ctx, `
+			INSERT INTO `+us.table("users")+` (id, email, name)
+			VALUES ($1, NULLIF($2, ''), $3)
+			RETURNING created_at, updated_at
+		`, user.ID, user.Email, user.Name).Scan(&user.CreatedAt, &user.UpdatedAt); createErr != nil {
+			if storehelper.IsUniqueViolation(createErr) {
+				return ErrEmailTaken
+			}
+			return fmt.Errorf("create GitHub user: %w", createErr)
+		}
+		if _, identityErr := tx.Exec(ctx, `
+			INSERT INTO `+us.table("auth_identities")+` (id, user_id, provider, provider_subject)
+			VALUES ($1, $2, 'github', $3)
+		`, uuid.New(), user.ID, subject); identityErr != nil {
+			if storehelper.IsUniqueViolation(identityErr) {
+				return ErrEmailTaken
+			}
+			return fmt.Errorf("save GitHub identity: %w", identityErr)
+		}
+		return nil
+	})
+	if err == nil {
+		return user, nil
+	}
+	if errors.Is(err, ErrEmailTaken) || storehelper.IsUniqueViolation(err) {
+		existing, lookupErr := us.findGitHubUser(ctx, subject)
+		if lookupErr == nil {
+			return existing, nil
+		}
+		if !errors.Is(lookupErr, ErrUserNotFound) {
+			return nil, lookupErr
+		}
+		return nil, ErrEmailTaken
+	}
+	return nil, fmt.Errorf("login GitHub user: %w", err)
+}
+
+func (us *UserStore) findGitHubUser(ctx context.Context, subject string) (*User, error) {
+	user := &User{}
+	err := us.db.QueryRow(ctx, `
+		SELECT u.id, COALESCE(u.email, ''), u.name, u.created_at, u.updated_at
+		FROM `+us.table("users")+` u
+		JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
+		WHERE a.provider = 'github' AND a.provider_subject = $1
+	`, strings.TrimSpace(subject)).Scan(
+		&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, fmt.Errorf("get GitHub user: %w", err)
 	}
 	return user, nil
 }
@@ -205,8 +288,8 @@ func (us *UserStore) RevokeSession(ctx context.Context, token string, sessionID 
 func (us *UserStore) Get(ctx context.Context, id uuid.UUID) (*User, error) {
 	user := &User{}
 	err := us.db.QueryRow(ctx, `
-		SELECT id, email, name, created_at, updated_at
-		FROM users
+		SELECT id, COALESCE(email, ''), name, created_at, updated_at
+		FROM `+us.table("users")+`
 		WHERE id = $1
 	`, id).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
@@ -233,7 +316,7 @@ func (us *UserStore) Add(ctx context.Context, email, name, password string) (*Us
 	user := &User{ID: uuid.New(), Email: email, Name: name}
 	err = withTransaction(ctx, us.db, "user creation", func(tx pgx.Tx) error {
 		if queryErr := tx.QueryRow(ctx, `
-			INSERT INTO users (id, email, name)
+			INSERT INTO `+us.table("users")+` (id, email, name)
 			VALUES ($1, $2, $3)
 			RETURNING created_at, updated_at
 		`, user.ID, user.Email, user.Name).Scan(&user.CreatedAt, &user.UpdatedAt); queryErr != nil {
@@ -244,7 +327,7 @@ func (us *UserStore) Add(ctx context.Context, email, name, password string) (*Us
 		}
 
 		if _, execErr := tx.Exec(ctx, `
-			INSERT INTO auth_identities (id, user_id, provider, provider_subject, password_hash)
+			INSERT INTO `+us.table("auth_identities")+` (id, user_id, provider, provider_subject, password_hash)
 			VALUES ($1, $2, 'password', $3, $4)
 		`, uuid.New(), user.ID, user.Email, string(passwordHash)); execErr != nil {
 			if storehelper.IsUniqueViolation(execErr) {
@@ -271,7 +354,7 @@ func (us *UserStore) Update(ctx context.Context, id uuid.UUID, email, name strin
 	user := &User{}
 	err := withTransaction(ctx, us.db, "user update", func(tx pgx.Tx) error {
 		if queryErr := tx.QueryRow(ctx, `
-			UPDATE users SET email = $2, name = $3, updated_at = now()
+			UPDATE `+us.table("users")+` SET email = $2, name = $3, updated_at = now()
 			WHERE id = $1
 			RETURNING id, email, name, created_at, updated_at
 		`, id, email, name).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt); queryErr != nil {
@@ -285,7 +368,7 @@ func (us *UserStore) Update(ctx context.Context, id uuid.UUID, email, name strin
 		}
 
 		if _, execErr := tx.Exec(ctx, `
-			UPDATE auth_identities
+			UPDATE `+us.table("auth_identities")+`
 			SET provider_subject = $2
 			WHERE user_id = $1 AND provider = 'password'
 		`, id, email); execErr != nil {

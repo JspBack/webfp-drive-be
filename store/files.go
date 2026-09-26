@@ -18,7 +18,10 @@ import (
 	storehelper "github.com/JspBack/webfp-drive/helper/store"
 )
 
-var ErrNotFound = errors.New("file not found")
+var (
+	ErrNotFound             = errors.New("file not found")
+	ErrStorageLimitExceeded = errors.New("storage limit exceeded")
+)
 
 type File struct {
 	ID          uuid.UUID  `json:"id"`
@@ -35,10 +38,12 @@ type File struct {
 }
 
 type FileStore struct {
-	s3     *s3.Client
-	db     *pgxpool.Pool
-	readDB *pgxpool.Pool
-	bucket string
+	schemaTables
+	s3           *s3.Client
+	db           *pgxpool.Pool
+	readDB       *pgxpool.Pool
+	bucket       string
+	storageLimit int64
 }
 
 type rowScanner interface {
@@ -80,7 +85,6 @@ func scanFile(row rowScanner) (*File, error) {
 const fileColumns = `id, owner_id, folder_id::text, object_key, filename, content_type,
 	size_bytes, checksum_sha256, status, created_at, updated_at`
 
-// Upload stores file bytes in R2 and creates ready metadata.
 func (fs *FileStore) Upload(
 	ctx context.Context,
 	ownerID uuid.UUID,
@@ -100,13 +104,27 @@ func (fs *FileStore) Upload(
 
 	fileID := uuid.New()
 	objectKey := fmt.Sprintf("users/%s/%s", ownerID, fileID)
-	file, err := scanFile(fs.db.QueryRow(ctx, `
-		INSERT INTO files (id, owner_id, folder_id, object_key, filename, content_type, size_bytes)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING `+fileColumns,
-		fileID, ownerID, folderID, objectKey, filename, contentType, sizeBytes,
-	))
+	var file *File
+	err := withTransaction(ctx, fs.db, "file upload", func(tx pgx.Tx) error {
+		if err := fs.reserveQuota(ctx, tx, ownerID, sizeBytes); err != nil {
+			return err
+		}
+		scanned, scanErr := scanFile(tx.QueryRow(ctx, `
+			INSERT INTO `+fs.table("files")+` (id, owner_id, folder_id, object_key, filename, content_type, size_bytes)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING `+fileColumns,
+			fileID, ownerID, folderID, objectKey, filename, contentType, sizeBytes,
+		))
+		if scanErr != nil {
+			return scanErr
+		}
+		file = scanned
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, ErrStorageLimitExceeded) {
+			return nil, fmt.Errorf("%w: limit is %d bytes", ErrStorageLimitExceeded, fs.storageLimit)
+		}
 		if storehelper.IsForeignKeyViolation(err, "files_folder_owner_fk") {
 			return nil, ErrFolderNotFound
 		}
@@ -121,19 +139,11 @@ func (fs *FileStore) Upload(
 		ContentType:   aws.String(file.ContentType),
 	})
 	if err != nil {
-		_, deleteErr := fs.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(fs.bucket),
-			Key:    aws.String(file.objectKey),
-		})
-		return nil, errors.Join(
-			fmt.Errorf("upload file object: %w", err),
-			wrapCleanupError("delete incomplete file object", deleteErr),
-			fs.deleteMetadata(ctx, file.ID, ownerID),
-		)
+		return nil, fs.abortUpload(ctx, file, ownerID, fmt.Errorf("upload file object: %w", err))
 	}
 
 	updated, err := scanFile(fs.db.QueryRow(ctx, `
-		UPDATE files SET status = 'ready', updated_at = now()
+		UPDATE `+fs.table("files")+` SET status = 'ready', updated_at = now()
 		WHERE id = $1 AND owner_id = $2
 		RETURNING `+fileColumns,
 		file.ID, ownerID,
@@ -151,9 +161,90 @@ func (fs *FileStore) Upload(
 	return updated, nil
 }
 
+func (fs *FileStore) reserveQuota(ctx context.Context, tx pgx.Tx, ownerID uuid.UUID, sizeBytes int64) error {
+	if fs.storageLimit <= 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), 0)`, ownerID.String()); err != nil {
+		return fmt.Errorf("lock storage usage: %w", err)
+	}
+	var used int64
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(SUM(size_bytes), 0) FROM `+fs.table("files")+` WHERE owner_id = $1`,
+		ownerID,
+	).Scan(&used); err != nil {
+		return fmt.Errorf("read storage usage: %w", err)
+	}
+	if used+sizeBytes > fs.storageLimit {
+		return ErrStorageLimitExceeded
+	}
+	return nil
+}
+
+func (fs *FileStore) StorageLimit() int64 {
+	return fs.storageLimit
+}
+
+func (fs *FileStore) abortUpload(ctx context.Context, file *File, ownerID uuid.UUID, uploadErr error) error {
+	_, deleteErr := fs.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(fs.bucket),
+		Key:    aws.String(file.objectKey),
+	})
+	return errors.Join(
+		uploadErr,
+		wrapCleanupError("delete incomplete file object", deleteErr),
+		fs.deleteMetadata(ctx, file.ID, ownerID),
+	)
+}
+
+func (fs *FileStore) Usage(ctx context.Context, ownerID uuid.UUID) (int64, int64, error) {
+	var usedBytes, fileCount int64
+	if err := fs.db.QueryRow(ctx,
+		`SELECT COALESCE(SUM(size_bytes), 0), COUNT(*) FROM `+fs.table("files")+` WHERE owner_id = $1`,
+		ownerID,
+	).Scan(&usedBytes, &fileCount); err != nil {
+		return 0, 0, fmt.Errorf("read storage usage: %w", err)
+	}
+	return usedBytes, fileCount, nil
+}
+
+func (fs *FileStore) GetFilenames(ctx context.Context, ownerID uuid.UUID, fileIDs []uuid.UUID) (map[uuid.UUID]string, error) {
+	filenames := make(map[uuid.UUID]string, len(fileIDs))
+	if len(fileIDs) == 0 {
+		return filenames, nil
+	}
+	ids := make([]string, 0, len(fileIDs))
+	for _, id := range fileIDs {
+		ids = append(ids, id.String())
+	}
+	rows, err := fs.db.Query(ctx,
+		`SELECT id::text, filename FROM `+fs.table("files")+` WHERE owner_id = $1 AND id::text = ANY($2)`,
+		ownerID, ids,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load file names: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rawID, filename string
+		if scanErr := rows.Scan(&rawID, &filename); scanErr != nil {
+			return nil, fmt.Errorf("scan file name: %w", scanErr)
+		}
+		fileID, parseErr := uuid.Parse(rawID)
+		if parseErr != nil {
+			continue
+		}
+		filenames[fileID] = filename
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("iterate file names: %w", rowsErr)
+	}
+	return filenames, nil
+}
+
 func (fs *FileStore) Get(ctx context.Context, ownerID, fileID uuid.UUID) (*File, error) {
 	file, err := scanFile(fs.db.QueryRow(ctx,
-		`SELECT `+fileColumns+` FROM files WHERE id = $1 AND owner_id = $2`,
+		`SELECT `+fileColumns+` FROM `+fs.table("files")+` WHERE id = $1 AND owner_id = $2`,
 		fileID, ownerID,
 	))
 	if err != nil {
@@ -172,7 +263,7 @@ func (fs *FileStore) List(ctx context.Context, ownerID uuid.UUID, folderID *uuid
 	}
 	rows, err := readDB.Query(ctx, `
 		SELECT `+fileColumns+`
-		FROM files
+		FROM `+fs.table("files")+`
 		WHERE owner_id = $1 AND folder_id IS NOT DISTINCT FROM $2
 		ORDER BY created_at DESC
 	`, ownerID, folderID)
@@ -207,7 +298,7 @@ func (fs *FileStore) Update(
 		filenameValue = strings.TrimSpace(*filename)
 	}
 	file, err := scanFile(fs.db.QueryRow(ctx, `
-		UPDATE files
+		UPDATE `+fs.table("files")+`
 		SET filename = CASE WHEN $3 THEN $4::text ELSE filename END,
 			folder_id = CASE WHEN $5 THEN $6::uuid ELSE folder_id END,
 			updated_at = now()
@@ -229,7 +320,7 @@ func (fs *FileStore) Update(
 
 func (fs *FileStore) Download(ctx context.Context, ownerID, fileID uuid.UUID) (*File, io.ReadCloser, error) {
 	file, err := scanFile(fs.db.QueryRow(ctx,
-		`SELECT `+fileColumns+` FROM files WHERE id = $1 AND owner_id = $2 AND status = 'ready'`,
+		`SELECT `+fileColumns+` FROM `+fs.table("files")+` WHERE id = $1 AND owner_id = $2 AND status = 'ready'`,
 		fileID, ownerID,
 	))
 	if err != nil {
@@ -249,7 +340,7 @@ func (fs *FileStore) Download(ctx context.Context, ownerID, fileID uuid.UUID) (*
 }
 
 func (fs *FileStore) deleteMetadata(ctx context.Context, fileID, ownerID uuid.UUID) error {
-	if _, err := fs.db.Exec(ctx, `DELETE FROM files WHERE id = $1 AND owner_id = $2`, fileID, ownerID); err != nil {
+	if _, err := fs.db.Exec(ctx, `DELETE FROM `+fs.table("files")+` WHERE id = $1 AND owner_id = $2`, fileID, ownerID); err != nil {
 		return fmt.Errorf("delete file metadata: %w", err)
 	}
 	return nil
@@ -274,7 +365,7 @@ func (fs *FileStore) Delete(ctx context.Context, ownerID, fileID uuid.UUID) erro
 	if err != nil {
 		return fmt.Errorf("delete file object: %w", err)
 	}
-	tag, err := fs.db.Exec(ctx, `DELETE FROM files WHERE id = $1 AND owner_id = $2`, fileID, ownerID)
+	tag, err := fs.db.Exec(ctx, `DELETE FROM `+fs.table("files")+` WHERE id = $1 AND owner_id = $2`, fileID, ownerID)
 	if err != nil {
 		return fmt.Errorf("delete file metadata: %w", err)
 	}

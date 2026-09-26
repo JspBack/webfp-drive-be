@@ -22,20 +22,25 @@ func New(cfg cfg.Config) *Store {
 	defer cancel()
 
 	clients := storeinit.New(ctx, cfg)
+	schema := schemaTables(cfg.DBSchema)
 	files := &FileStore{
-		s3:     clients.S3,
-		db:     clients.DB,
-		readDB: clients.ReadDB,
-		bucket: cfg.R2BucketName,
+		schemaTables: schema,
+		s3:           clients.S3,
+		db:           clients.DB,
+		readDB:       clients.ReadDB,
+		bucket:       cfg.R2BucketName,
+		storageLimit: cfg.UserStorageLimitBytes,
 	}
 
 	return &Store{
 		Files: files,
 		Folders: &FolderStore{
-			db:     clients.DB,
-			readDB: clients.ReadDB,
+			schemaTables: schema,
+			db:           clients.DB,
+			readDB:       clients.ReadDB,
 		},
 		Users: &UserStore{
+			schemaTables:    schema,
 			db:              clients.DB,
 			cache:           clients.Redis,
 			accessLifetime:  cfg.AccessTokenLifetime,
