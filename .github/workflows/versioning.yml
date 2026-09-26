@@ -2,7 +2,7 @@ name: versioning
 
 on:
   push:
-    branches: [main]
+    branches: [stable]
 
 permissions:
   contents: write
