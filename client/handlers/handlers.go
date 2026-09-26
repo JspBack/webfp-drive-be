@@ -18,6 +18,7 @@ type Handler struct {
 	publicHost          string
 	publicScheme        string
 	githubOAuth         *authhelper.GitHubOAuth
+	googleOAuth         *authhelper.GoogleOAuth
 }
 
 func New(
@@ -27,6 +28,7 @@ func New(
 	publicHost string,
 	useTLS bool,
 	githubOAuth *authhelper.GitHubOAuth,
+	googleOAuth *authhelper.GoogleOAuth,
 ) *Handler {
 	scheme := "http"
 	if useTLS {
@@ -40,6 +42,7 @@ func New(
 		publicHost:          publicHost,
 		publicScheme:        scheme,
 		githubOAuth:         githubOAuth,
+		googleOAuth:         googleOAuth,
 	}
 }
 

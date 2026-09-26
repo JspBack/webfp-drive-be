@@ -11,7 +11,7 @@ build:
 run:
 	./bin/be
 lint:
-	golangci-lint run
+	golangci-lint run --fix
 	go vet ./...
 test:
 	go test ./... -count=1

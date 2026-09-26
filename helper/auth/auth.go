@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -13,6 +15,8 @@ import (
 
 	httphelper "github.com/JspBack/webfp-drive/helper/http"
 )
+
+const maxOAuthResponseSize = 1 << 20
 
 type contextKey string
 
@@ -102,4 +106,33 @@ func SessionToken(ctx context.Context) (string, bool) {
 func SessionID(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := ctx.Value(sessionIDKey).(uuid.UUID)
 	return id, ok
+}
+
+// fetchJSON loads an OAuth provider API response into dst using a bearer token.
+func fetchJSON(
+	ctx context.Context,
+	client *http.Client,
+	accessToken, accept, provider, url string,
+	dst any,
+) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build %s request: %w", provider, err)
+	}
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	request.Header.Set("Accept", accept)
+
+	response, err := client.Do(request)
+	if err != nil {
+		return fmt.Errorf("call %s: %w", provider, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s responded with %s", provider, response.Status)
+	}
+	limited := io.LimitReader(response.Body, maxOAuthResponseSize)
+	if decodeErr := json.NewDecoder(limited).Decode(dst); decodeErr != nil {
+		return fmt.Errorf("decode %s response: %w", provider, decodeErr)
+	}
+	return nil
 }

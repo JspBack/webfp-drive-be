@@ -2,10 +2,8 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,8 +17,7 @@ const (
 	githubUserURL   = "https://api.github.com/user"
 	githubEmailsURL = "https://api.github.com/user/emails"
 
-	githubRequestTimeout  = 15 * time.Second
-	maxGitHubResponseSize = 1 << 20
+	githubRequestTimeout = 15 * time.Second
 )
 
 type GitHubProfile struct {
@@ -141,24 +138,5 @@ func pickVerifiedEmail(
 }
 
 func (g *GitHubOAuth) getJSON(ctx context.Context, accessToken, url string, dst any) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("build GitHub request: %w", err)
-	}
-	request.Header.Set("Authorization", "Bearer "+accessToken)
-	request.Header.Set("Accept", "application/vnd.github+json")
-
-	response, err := g.client.Do(request)
-	if err != nil {
-		return fmt.Errorf("call GitHub: %w", err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("GitHub responded with %s", response.Status)
-	}
-	limited := io.LimitReader(response.Body, maxGitHubResponseSize)
-	if decodeErr := json.NewDecoder(limited).Decode(dst); decodeErr != nil {
-		return fmt.Errorf("decode GitHub response: %w", decodeErr)
-	}
-	return nil
+	return fetchJSON(ctx, g.client, accessToken, "application/vnd.github+json", "GitHub", url, dst)
 }

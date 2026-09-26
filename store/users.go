@@ -104,27 +104,27 @@ func (us *UserStore) Authenticate(ctx context.Context, email, password string) (
 	return user, nil
 }
 
-func (us *UserStore) LoginGitHub(ctx context.Context, subject, email, name string) (*User, error) {
+func (us *UserStore) OAuthLogin(ctx context.Context, provider, subject, email, name string) (*User, error) {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		return nil, errors.New("github subject is required")
+		return nil, fmt.Errorf("%s subject is required", provider)
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	name = strings.TrimSpace(name)
 
 	user := &User{}
-	err := withTransaction(ctx, us.db, "GitHub user login", func(tx pgx.Tx) error {
+	err := withTransaction(ctx, us.db, provider+" user login", func(tx pgx.Tx) error {
 		lookupErr := tx.QueryRow(ctx, `
 			SELECT u.id, COALESCE(u.email, ''), u.name, u.created_at, u.updated_at
 			FROM `+us.table("users")+` u
 			JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
-			WHERE a.provider = 'github' AND a.provider_subject = $1
-		`, subject).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+			WHERE a.provider = $2 AND a.provider_subject = $1
+		`, subject, provider).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
 		if lookupErr == nil {
 			return nil
 		}
 		if !errors.Is(lookupErr, pgx.ErrNoRows) {
-			return fmt.Errorf("find GitHub identity: %w", lookupErr)
+			return fmt.Errorf("find %s identity: %w", provider, lookupErr)
 		}
 
 		user.ID = uuid.New()
@@ -138,16 +138,16 @@ func (us *UserStore) LoginGitHub(ctx context.Context, subject, email, name strin
 			if storehelper.IsUniqueViolation(createErr) {
 				return ErrEmailTaken
 			}
-			return fmt.Errorf("create GitHub user: %w", createErr)
+			return fmt.Errorf("create %s user: %w", provider, createErr)
 		}
 		if _, identityErr := tx.Exec(ctx, `
 			INSERT INTO `+us.table("auth_identities")+` (id, user_id, provider, provider_subject)
-			VALUES ($1, $2, 'github', $3)
-		`, uuid.New(), user.ID, subject); identityErr != nil {
+			VALUES ($1, $2, $3, $4)
+		`, uuid.New(), user.ID, provider, subject); identityErr != nil {
 			if storehelper.IsUniqueViolation(identityErr) {
 				return ErrEmailTaken
 			}
-			return fmt.Errorf("save GitHub identity: %w", identityErr)
+			return fmt.Errorf("save %s identity: %w", provider, identityErr)
 		}
 		return nil
 	})
@@ -155,7 +155,7 @@ func (us *UserStore) LoginGitHub(ctx context.Context, subject, email, name strin
 		return user, nil
 	}
 	if errors.Is(err, ErrEmailTaken) || storehelper.IsUniqueViolation(err) {
-		existing, lookupErr := us.findGitHubUser(ctx, subject)
+		existing, lookupErr := us.findOAuthUser(ctx, provider, subject)
 		if lookupErr == nil {
 			return existing, nil
 		}
@@ -164,24 +164,24 @@ func (us *UserStore) LoginGitHub(ctx context.Context, subject, email, name strin
 		}
 		return nil, ErrEmailTaken
 	}
-	return nil, fmt.Errorf("login GitHub user: %w", err)
+	return nil, fmt.Errorf("login %s user: %w", provider, err)
 }
 
-func (us *UserStore) findGitHubUser(ctx context.Context, subject string) (*User, error) {
+func (us *UserStore) findOAuthUser(ctx context.Context, provider, subject string) (*User, error) {
 	user := &User{}
 	err := us.db.QueryRow(ctx, `
 		SELECT u.id, COALESCE(u.email, ''), u.name, u.created_at, u.updated_at
 		FROM `+us.table("users")+` u
 		JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
-		WHERE a.provider = 'github' AND a.provider_subject = $1
-	`, strings.TrimSpace(subject)).Scan(
+		WHERE a.provider = $2 AND a.provider_subject = $1
+	`, strings.TrimSpace(subject), provider).Scan(
 		&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
 		}
-		return nil, fmt.Errorf("get GitHub user: %w", err)
+		return nil, fmt.Errorf("get %s user: %w", provider, err)
 	}
 	return user, nil
 }

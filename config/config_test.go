@@ -144,6 +144,7 @@ func TestLoadRedisAndR2Config(t *testing.T) {
 func TestLoadAuthConfig(t *testing.T) {
 	setEnv(t, map[string]string{
 		"GITHUB_CLIENT_ID": "client-id", "GITHUB_CLIENT_SECRET": "client-secret",
+		"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": "",
 		"OAUTH_RETURN_URL": "http://localhost:5173/auth/callback",
 	})
 
@@ -160,6 +161,7 @@ func TestLoadAuthConfig(t *testing.T) {
 func TestLoadAuthConfigDisabledWithoutClientID(t *testing.T) {
 	setEnv(t, map[string]string{
 		"GITHUB_CLIENT_ID": "", "GITHUB_CLIENT_SECRET": "client-secret",
+		"GOOGLE_CLIENT_ID": "", "GOOGLE_CLIENT_SECRET": "",
 		"OAUTH_RETURN_URL": "",
 	})
 
@@ -188,6 +190,50 @@ func TestLoadAuthConfigRejectsIncompleteGitHubOAuth(t *testing.T) {
 			setEnv(t, map[string]string{
 				"GITHUB_CLIENT_ID":     test.id,
 				"GITHUB_CLIENT_SECRET": test.secret,
+				"GOOGLE_CLIENT_ID":     "", "GOOGLE_CLIENT_SECRET": "",
+				"OAUTH_RETURN_URL": test.returnURL,
+			})
+			if err := loadAuthConfig(&Config{}); err == nil {
+				t.Fatal("loadAuthConfig() succeeded, want error")
+			}
+		})
+	}
+}
+
+func TestLoadAuthConfigGoogle(t *testing.T) {
+	setEnv(t, map[string]string{
+		"GITHUB_CLIENT_ID": "", "GITHUB_CLIENT_SECRET": "",
+		"GOOGLE_CLIENT_ID": "google-client-id", "GOOGLE_CLIENT_SECRET": "google-client-secret",
+		"OAUTH_RETURN_URL": "http://localhost:5173/auth/callback",
+	})
+
+	var got Config
+	if err := loadAuthConfig(&got); err != nil {
+		t.Fatalf("loadAuthConfig() error = %v", err)
+	}
+	if got.GoogleClientID != "google-client-id" || got.GoogleClientSecret != "google-client-secret" ||
+		got.OAuthReturnURL != "http://localhost:5173/auth/callback" {
+		t.Errorf("unexpected auth settings: %+v", got)
+	}
+}
+
+func TestLoadAuthConfigRejectsIncompleteGoogleOAuth(t *testing.T) {
+	tests := []struct {
+		name      string
+		id        string
+		secret    string
+		returnURL string
+	}{
+		{"missing secret", "google-client-id", "", "http://localhost:5173/auth/callback"},
+		{"missing return", "google-client-id", "google-client-secret", ""},
+		{"relative return", "google-client-id", "google-client-secret", "/auth/callback"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setEnv(t, map[string]string{
+				"GITHUB_CLIENT_ID": "", "GITHUB_CLIENT_SECRET": "",
+				"GOOGLE_CLIENT_ID":     test.id,
+				"GOOGLE_CLIENT_SECRET": test.secret,
 				"OAUTH_RETURN_URL":     test.returnURL,
 			})
 			if err := loadAuthConfig(&Config{}); err == nil {

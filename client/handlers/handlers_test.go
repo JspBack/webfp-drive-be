@@ -16,7 +16,7 @@ import (
 )
 
 func testHandler() *handlers.Handler {
-	return handlers.New(nil, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1024, 1024, "", false, nil)
+	return handlers.New(nil, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1024, 1024, "", false, nil, nil)
 }
 
 func authenticatedRequest(method, target, body string) *http.Request {
@@ -131,6 +131,12 @@ func TestGitHubAuthRequiresConfiguration(t *testing.T) {
 	assertStatus(t, h.GitHubCallback, httptest.NewRequest(http.MethodGet, "/?code=x&state=y", nil), http.StatusServiceUnavailable)
 }
 
+func TestGoogleAuthRequiresConfiguration(t *testing.T) {
+	h := testHandler()
+	assertStatus(t, h.LoginGoogle, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusServiceUnavailable)
+	assertStatus(t, h.OAuthCallback, httptest.NewRequest(http.MethodGet, "/?code=x&state=y", nil), http.StatusServiceUnavailable)
+}
+
 func TestLoginGitHubRedirectsToGitHub(t *testing.T) {
 	h := configuredGitHubHandler()
 	recorder := httptest.NewRecorder()
@@ -177,7 +183,75 @@ func configuredGitHubHandler() *handlers.Handler {
 			"http://localhost:8080/callback",
 			"http://localhost:5173/auth/callback",
 		),
+		nil,
 	)
+}
+
+func configuredGoogleHandler() *handlers.Handler {
+	return handlers.New(
+		nil,
+		slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		1024, 1024, "", false,
+		nil,
+		authhelper.NewGoogleOAuth(
+			"google-client-id", "google-client-secret",
+			"http://localhost:8080/api/v1/callback",
+			"http://localhost:5173/auth/callback",
+		),
+	)
+}
+
+func TestLoginGoogleRedirectsToGoogle(t *testing.T) {
+	h := configuredGoogleHandler()
+	recorder := httptest.NewRecorder()
+	h.LoginGoogle(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("LoginGoogle() status = %d, want %d", recorder.Code, http.StatusTemporaryRedirect)
+	}
+	location := recorder.Header().Get("Location")
+	if !strings.HasPrefix(location, "https://accounts.google.com/o/oauth2/auth?") ||
+		!strings.Contains(location, "client_id=google-client-id") ||
+		!strings.Contains(location, "state=") {
+		t.Errorf("LoginGoogle() Location = %q, want a Google authorize URL with state", location)
+	}
+	cookies := recorder.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != "webfp_google_state" || cookies[0].Value == "" {
+		t.Errorf("LoginGoogle() cookies = %+v, want a single non-empty state cookie", cookies)
+	}
+}
+
+func TestOAuthCallbackRoutesGoogleStateToGoogle(t *testing.T) {
+	h := configuredGoogleHandler()
+	request := httptest.NewRequest(http.MethodGet, "/callback?code=code&state=other", nil)
+	request.AddCookie(&http.Cookie{Name: "webfp_google_state", Value: "expected"})
+	recorder := httptest.NewRecorder()
+
+	h.OAuthCallback(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("OAuthCallback() status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+	location := recorder.Header().Get("Location")
+	if !strings.Contains(location, "error=") || !strings.Contains(location, "Google") {
+		t.Errorf("OAuthCallback() Location = %q, want a Google error redirect", location)
+	}
+}
+
+func TestGoogleCallbackRejectsMismatchedState(t *testing.T) {
+	h := configuredGoogleHandler()
+	request := httptest.NewRequest(http.MethodGet, "/callback?code=code&state=other", nil)
+	request.AddCookie(&http.Cookie{Name: "webfp_google_state", Value: "expected"})
+	recorder := httptest.NewRecorder()
+
+	h.GoogleCallback(recorder, request)
+
+	if recorder.Code != http.StatusFound {
+		t.Fatalf("GoogleCallback() status = %d, want %d", recorder.Code, http.StatusFound)
+	}
+	if location := recorder.Header().Get("Location"); !strings.Contains(location, "error=") {
+		t.Errorf("GoogleCallback() Location = %q, want an error redirect", location)
+	}
 }
 
 func TestRequireSessionRejectsMissingBearerToken(t *testing.T) {

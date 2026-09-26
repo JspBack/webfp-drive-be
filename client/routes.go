@@ -12,7 +12,7 @@ import (
 func (c *Client) registerRoutes(mux *http.ServeMux) {
 	h := handlers.New(
 		c.Store, c.log, c.MaxFileSize, c.MaxRequestBodyBytes,
-		c.publicHost, c.UseTLS(), c.githubOAuth,
+		c.publicHost, c.UseTLS(), c.githubOAuth, c.googleOAuth,
 	)
 	mux.Handle("GET /swagger", http.RedirectHandler("/swagger/index.html", http.StatusTemporaryRedirect))
 	mux.Handle("GET /swagger/", httpSwagger.Handler(
@@ -32,7 +32,8 @@ func (c *Client) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/register", h.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", h.Login)
 	mux.HandleFunc("GET /api/v1/auth/github", h.LoginGitHub)
-	mux.HandleFunc("GET /api/v1/callback", h.GitHubCallback)
+	mux.HandleFunc("GET /api/v1/auth/google", h.LoginGoogle)
+	mux.HandleFunc("GET /api/v1/callback", h.OAuthCallback)
 	mux.HandleFunc("POST /api/v1/auth/refresh", h.Refresh)
 	mux.Handle("POST /api/v1/auth/logout", h.RequireSession(http.HandlerFunc(h.Logout)))
 	mux.Handle("GET /api/v1/users/me", h.RequireSession(http.HandlerFunc(h.GetUser)))

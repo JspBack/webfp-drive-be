@@ -31,6 +31,7 @@ type Client struct {
 	ShutdownTimeout     time.Duration
 	publicHost          string
 	githubOAuth         *authhelper.GitHubOAuth
+	googleOAuth         *authhelper.GoogleOAuth
 
 	tlsConfig  *tls.Config
 	certFile   string
@@ -74,6 +75,7 @@ func New(cfg config.Config, logger *slog.Logger) *Client {
 		ShutdownTimeout:     cfg.ShutdownTimeout,
 		publicHost:          cfg.PublicHost,
 		githubOAuth:         newGitHubOAuth(cfg),
+		googleOAuth:         newGoogleOAuth(cfg),
 		tlsConfig:           tlsConfig,
 		certFile:            cfg.CertFile,
 		keyFileTLS:          cfg.KeyFileTLS,
@@ -88,6 +90,15 @@ func newGitHubOAuth(cfg config.Config) *authhelper.GitHubOAuth {
 	}
 	return authhelper.NewGitHubOAuth(
 		cfg.GitHubClientID, cfg.GitHubClientSecret, oauthRedirectURL(cfg), cfg.OAuthReturnURL,
+	)
+}
+
+func newGoogleOAuth(cfg config.Config) *authhelper.GoogleOAuth {
+	if cfg.GoogleClientID == "" {
+		return nil
+	}
+	return authhelper.NewGoogleOAuth(
+		cfg.GoogleClientID, cfg.GoogleClientSecret, oauthRedirectURL(cfg), cfg.OAuthReturnURL,
 	)
 }
 

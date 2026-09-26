@@ -52,6 +52,8 @@ type Config struct {
 	R2SecretAccessKey     string
 	GitHubClientID        string
 	GitHubClientSecret    string
+	GoogleClientID        string
+	GoogleClientSecret    string
 	OAuthReturnURL        string
 }
 
@@ -218,12 +220,17 @@ func loadR2Config(c *Config) error {
 func loadAuthConfig(c *Config) error {
 	c.GitHubClientID = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_ID"))
 	c.GitHubClientSecret = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET"))
+	c.GoogleClientID = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
+	c.GoogleClientSecret = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
 	c.OAuthReturnURL = strings.TrimSpace(os.Getenv("OAUTH_RETURN_URL"))
-	if c.GitHubClientID == "" {
-		return nil
-	}
-	if c.GitHubClientSecret == "" {
+	if c.GitHubClientID != "" && c.GitHubClientSecret == "" {
 		return errors.New("GITHUB_CLIENT_SECRET is required when GITHUB_CLIENT_ID is set")
+	}
+	if c.GoogleClientID != "" && c.GoogleClientSecret == "" {
+		return errors.New("GOOGLE_CLIENT_SECRET is required when GOOGLE_CLIENT_ID is set")
+	}
+	if c.GitHubClientID == "" && c.GoogleClientID == "" {
+		return nil
 	}
 	if err := validateAbsoluteURL(c.OAuthReturnURL); err != nil {
 		return fmt.Errorf("OAUTH_RETURN_URL: %w", err)
