@@ -22,6 +22,25 @@ type updateFileRequest struct {
 	Filename *string `json:"filename"`
 }
 
+type createFileUploadResponse struct {
+	File      *store.File `json:"file"`
+	UploadURL string      `json:"upload_url"`
+}
+
+// CreateFileUpload godoc
+// @Summary      Create a file upload
+// @Description  Creates pending file metadata and returns a temporary presigned R2 PUT URL. Upload file bytes directly to that URL, then complete the upload.
+// @Tags         files
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        request  body      createFileRequest  true  "File metadata"
+// @Success      201      {object}  createFileUploadResponse
+// @Failure      400      {object}  map[string]string
+// @Failure      401      {object}  map[string]string
+// @Failure      404      {object}  map[string]string  "Folder not found"
+// @Failure      500      {object}  map[string]string
+// @Router       /api/v1/files [post]
 func (h *Handler) CreateFileUpload(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -64,12 +83,22 @@ func (h *Handler) CreateFileUpload(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, r, "create file upload", err)
 		return
 	}
-	httphelper.JSON(w, http.StatusCreated, map[string]any{
-		"file":       file,
-		"upload_url": uploadURL,
-	})
+	httphelper.JSON(w, http.StatusCreated, createFileUploadResponse{File: file, UploadURL: uploadURL})
 }
 
+// CompleteFileUpload godoc
+// @Summary      Complete a file upload
+// @Description  Verifies that the uploaded R2 object matches the declared size and marks it ready.
+// @Tags         files
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id   path      string  true  "File UUID"
+// @Success      200  {object}  store.File
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string  "File not found or upload unavailable"
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/files/{id}/complete [post]
 func (h *Handler) CompleteFileUpload(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -87,6 +116,18 @@ func (h *Handler) CompleteFileUpload(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, file)
 }
 
+// ListFiles godoc
+// @Summary      List files
+// @Description  Lists the current user's files, optionally filtered by folder. Omit folder_id to list files at the root.
+// @Tags         files
+// @Produce      json
+// @Security     BearerAuth
+// @Param        folder_id  query     string  false  "Folder UUID"
+// @Success      200        {array}   store.File
+// @Failure      400        {object}  map[string]string
+// @Failure      401        {object}  map[string]string
+// @Failure      500        {object}  map[string]string
+// @Router       /api/v1/files [get]
 func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -104,6 +145,18 @@ func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, files)
 }
 
+// GetFile godoc
+// @Summary   Get file metadata
+// @Tags      files
+// @Produce   json
+// @Security  BearerAuth
+// @Param     id   path      string  true  "File UUID"
+// @Success   200  {object}  store.File
+// @Failure   400  {object}  map[string]string
+// @Failure   401  {object}  map[string]string
+// @Failure   404  {object}  map[string]string
+// @Failure   500  {object}  map[string]string
+// @Router    /api/v1/files/{id} [get]
 func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -121,6 +174,18 @@ func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, file)
 }
 
+// DownloadFile godoc
+// @Summary      Download a file
+// @Description  Redirects to a short-lived presigned R2 download URL.
+// @Tags         files
+// @Security     BearerAuth
+// @Param        id   path  string  true  "File UUID"
+// @Success      307  "Redirect to the presigned download URL"
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/files/{id}/download [get]
 func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -138,6 +203,20 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, downloadURL, http.StatusTemporaryRedirect)
 }
 
+// UpdateFile godoc
+// @Summary   Rename a file
+// @Tags      files
+// @Accept    json
+// @Produce   json
+// @Security  BearerAuth
+// @Param     id       path      string             true  "File UUID"
+// @Param     request  body      updateFileRequest  true  "New file name"
+// @Success   200      {object}  store.File
+// @Failure   400      {object}  map[string]string
+// @Failure   401      {object}  map[string]string
+// @Failure   404      {object}  map[string]string
+// @Failure   500      {object}  map[string]string
+// @Router    /api/v1/files/{id} [patch]
 func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -169,6 +248,18 @@ func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, file)
 }
 
+// DeleteFile godoc
+// @Summary      Delete a file
+// @Description  Deletes the stored object and its metadata.
+// @Tags         files
+// @Security     BearerAuth
+// @Param        id   path  string  true  "File UUID"
+// @Success      204  "File deleted"
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/files/{id} [delete]
 func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {

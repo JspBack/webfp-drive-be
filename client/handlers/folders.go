@@ -21,6 +21,20 @@ type updateFolderRequest struct {
 	Name string `json:"name"`
 }
 
+// CreateFolder godoc
+// @Summary   Create a folder
+// @Tags      folders
+// @Accept    json
+// @Produce   json
+// @Security  BearerAuth
+// @Param     request  body      createFolderRequest  true  "Folder details"
+// @Success   201      {object}  store.Folder
+// @Failure   400      {object}  map[string]string
+// @Failure   401      {object}  map[string]string
+// @Failure   404      {object}  map[string]string  "Parent folder not found"
+// @Failure   409      {object}  map[string]string  "Folder name already exists"
+// @Failure   500      {object}  map[string]string
+// @Router    /api/v1/folders [post]
 func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -60,6 +74,18 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusCreated, folder)
 }
 
+// ListFolders godoc
+// @Summary      List folders
+// @Description  Lists the current user's folders, optionally filtered by parent. Omit parent_id to list root folders.
+// @Tags         folders
+// @Produce      json
+// @Security     BearerAuth
+// @Param        parent_id  query     string  false  "Parent folder UUID"
+// @Success      200        {array}   store.Folder
+// @Failure      400        {object}  map[string]string
+// @Failure      401        {object}  map[string]string
+// @Failure      500        {object}  map[string]string
+// @Router       /api/v1/folders [get]
 func (h *Handler) ListFolders(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -77,6 +103,18 @@ func (h *Handler) ListFolders(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, folders)
 }
 
+// GetFolder godoc
+// @Summary   Get folder metadata
+// @Tags      folders
+// @Produce   json
+// @Security  BearerAuth
+// @Param     id   path      string  true  "Folder UUID"
+// @Success   200  {object}  store.Folder
+// @Failure   400  {object}  map[string]string
+// @Failure   401  {object}  map[string]string
+// @Failure   404  {object}  map[string]string
+// @Failure   500  {object}  map[string]string
+// @Router    /api/v1/folders/{id} [get]
 func (h *Handler) GetFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -94,6 +132,21 @@ func (h *Handler) GetFolder(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, folder)
 }
 
+// UpdateFolder godoc
+// @Summary   Rename a folder
+// @Tags      folders
+// @Accept    json
+// @Produce   json
+// @Security  BearerAuth
+// @Param     id       path      string               true  "Folder UUID"
+// @Param     request  body      updateFolderRequest  true  "New folder name"
+// @Success   200      {object}  store.Folder
+// @Failure   400      {object}  map[string]string
+// @Failure   401      {object}  map[string]string
+// @Failure   404      {object}  map[string]string
+// @Failure   409      {object}  map[string]string  "Folder name already exists"
+// @Failure   500      {object}  map[string]string
+// @Router    /api/v1/folders/{id} [patch]
 func (h *Handler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -124,6 +177,19 @@ func (h *Handler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, folder)
 }
 
+// DeleteFolder godoc
+// @Summary      Delete an empty folder
+// @Description  Folders must have no child folders or files before deletion.
+// @Tags         folders
+// @Security     BearerAuth
+// @Param        id   path  string  true  "Folder UUID"
+// @Success      204  "Folder deleted"
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Failure      409  {object}  map[string]string  "Folder is not empty"
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/folders/{id} [delete]
 func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {

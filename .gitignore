@@ -7,3 +7,6 @@ bin*
 # env files
 .env*
 !.env.example
+
+# docs
+docs/

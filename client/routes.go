@@ -4,10 +4,14 @@ import (
 	"net/http"
 
 	"github.com/JspBack/webfp-drive/client/handlers"
+	_ "github.com/JspBack/webfp-drive/docs"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 func (c *Client) registerRoutes(mux *http.ServeMux) {
 	h := handlers.New(c.Store, c.log, c.MaxFileSize, c.MaxRequestBodyBytes)
+	mux.Handle("GET /swagger", http.RedirectHandler("/swagger/index.html", http.StatusTemporaryRedirect))
+	mux.Handle("GET /swagger/", httpSwagger.Handler(httpSwagger.URL("/swagger/doc.json")))
 	mux.HandleFunc("GET /api/health", h.Health)
 	mux.HandleFunc("POST /api/v1/auth/register", h.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", h.Login)
@@ -29,5 +33,5 @@ func (c *Client) registerRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/files/{id}/shares", h.RequireSession(http.HandlerFunc(h.CreateShare)))
 	mux.Handle("DELETE /api/v1/shares/{id}", h.RequireSession(http.HandlerFunc(h.RevokeShare)))
 	mux.HandleFunc("GET /api/v1/shares/{token}", h.DownloadSharedFile)
-	mux.HandleFunc("POST /api/v1/shares/{token}/download", h.DownloadSharedFile)
+	mux.HandleFunc("POST /api/v1/shares/{token}/download", h.SubmitSharePassword)
 }

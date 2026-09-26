@@ -27,6 +27,18 @@ type updateUserRequest struct {
 	Name  *string `json:"name"`
 }
 
+// Register godoc
+// @Summary      Register an account
+// @Description  Creates a password-based account and starts a session.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request  body      credentialsRequest  true  "Registration details"
+// @Success      201      {object}  authResponse
+// @Failure      400      {object}  map[string]string
+// @Failure      409      {object}  map[string]string  "Email already registered"
+// @Failure      500      {object}  map[string]string
+// @Router       /api/v1/auth/register [post]
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if err := h.decodeJSON(w, r, &req); err != nil {
@@ -61,6 +73,18 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusCreated, authResponse{User: user, Token: token})
 }
 
+// Login godoc
+// @Summary      Log in
+// @Description  Authenticates with email and password and returns a bearer session token.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request  body      credentialsRequest  true  "Login credentials"
+// @Success      200      {object}  authResponse
+// @Failure      400      {object}  map[string]string
+// @Failure      401      {object}  map[string]string  "Invalid credentials"
+// @Failure      500      {object}  map[string]string
+// @Router       /api/v1/auth/login [post]
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if err := h.decodeJSON(w, r, &req); err != nil {
@@ -84,6 +108,16 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, authResponse{User: user, Token: token})
 }
 
+// Logout godoc
+// @Summary      Log out
+// @Description  Revokes the current bearer session.
+// @Tags         auth
+// @Produce      json
+// @Security     BearerAuth
+// @Success      204  "Session revoked"
+// @Failure      401  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/auth/logout [post]
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	token, _ := authhelper.SessionToken(r.Context())
 	if err := h.store.Users.RevokeSession(r.Context(), token); err != nil {
@@ -93,6 +127,20 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// UpdateUser godoc
+// @Summary   Update the current user
+// @Tags      users
+// @Accept    json
+// @Produce   json
+// @Security  BearerAuth
+// @Param     request  body      updateUserRequest  true  "Fields to update"
+// @Success   200      {object}  store.User
+// @Failure   400      {object}  map[string]string
+// @Failure   401      {object}  map[string]string
+// @Failure   404      {object}  map[string]string
+// @Failure   409      {object}  map[string]string  "Email already registered"
+// @Failure   500      {object}  map[string]string
+// @Router    /api/v1/users/me [patch]
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -145,6 +193,16 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, user)
 }
 
+// GetUser godoc
+// @Summary   Get the current user
+// @Tags      users
+// @Produce   json
+// @Security  BearerAuth
+// @Success   200  {object}  store.User
+// @Failure   401  {object}  map[string]string
+// @Failure   404  {object}  map[string]string
+// @Failure   500  {object}  map[string]string
+// @Router    /api/v1/users/me [get]
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {

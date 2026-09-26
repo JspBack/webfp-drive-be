@@ -1,3 +1,11 @@
+// @title                       WebFP Drive API
+// @version                     1.0
+// @description                 API for account, file, folder, and share management. Use bearer sessions in the Authorization header as Bearer <token>.
+// @BasePath                    /
+// @schemes                     http https
+// @securityDefinitions.apikey  BearerAuth
+// @in                          header
+// @name                        Authorization
 package main
 
 import (
