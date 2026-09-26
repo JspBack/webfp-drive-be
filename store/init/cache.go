@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/JspBack/webfp-drive/config"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/JspBack/webfp-drive/config"
 )
 
 func newCache(ctx context.Context, cfg config.Config) (*redis.Client, error) {
@@ -19,9 +20,9 @@ func newCache(ctx context.Context, cfg config.Config) (*redis.Client, error) {
 	options.ConnMaxIdleTime = cfg.RedisConnMaxIdleTime
 
 	cache := redis.NewClient(options)
-	if err := cache.Ping(ctx).Err(); err != nil {
+	if pingErr := cache.Ping(ctx).Err(); pingErr != nil {
 		_ = cache.Close()
-		return nil, fmt.Errorf("healthcheck Redis: %w", err)
+		return nil, fmt.Errorf("healthcheck Redis: %w", pingErr)
 	}
 	return cache, nil
 }

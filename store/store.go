@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	cfg "github.com/JspBack/webfp-drive/config"
@@ -22,12 +23,9 @@ func New(cfg cfg.Config) *Store {
 
 	clients := storeinit.New(ctx, cfg)
 	files := &FileStore{
-		s3:                  clients.S3,
-		presign:             clients.Presign,
-		db:                  clients.DB,
-		bucket:              cfg.R2BucketName,
-		uploadURLLifetime:   cfg.UploadURLLifetime,
-		downloadURLLifetime: cfg.DownloadURLLifetime,
+		s3:     clients.S3,
+		db:     clients.DB,
+		bucket: cfg.R2BucketName,
 	}
 
 	return &Store{
@@ -38,7 +36,8 @@ func New(cfg cfg.Config) *Store {
 		Users: &UserStore{
 			db:              clients.DB,
 			cache:           clients.Redis,
-			sessionLifetime: cfg.SessionLifetime,
+			accessLifetime:  cfg.AccessTokenLifetime,
+			refreshLifetime: cfg.RefreshTokenLifetime,
 		},
 		Shares: &ShareStore{
 			cache: clients.Redis,
@@ -48,19 +47,22 @@ func New(cfg cfg.Config) *Store {
 	}
 }
 
-func (s *Store) Shutdown(ctx context.Context) error {
+func (s *Store) Shutdown(_ context.Context) error {
 	if s == nil {
 		return nil
 	}
 	if err := s.clients.Close(); err != nil {
-		return err
+		return fmt.Errorf("close store clients: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) HealthCheck(ctx context.Context) error {
 	if s == nil || s.clients == nil {
-		return fmt.Errorf("store clients are not initialized")
+		return errors.New("store clients are not initialized")
 	}
-	return s.clients.HealthCheck(ctx)
+	if err := s.clients.HealthCheck(ctx); err != nil {
+		return fmt.Errorf("check store health: %w", err)
+	}
+	return nil
 }

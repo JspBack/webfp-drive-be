@@ -5,18 +5,18 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/JspBack/webfp-drive/config"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/JspBack/webfp-drive/config"
 )
 
 type Clients struct {
-	DB      *pgxpool.Pool
-	Redis   *redis.Client
-	S3      *s3.Client
-	Presign *s3.PresignClient
+	DB    *pgxpool.Pool
+	Redis *redis.Client
+	S3    *s3.Client
 
 	bucket string
 }
@@ -24,28 +24,29 @@ type Clients struct {
 func New(ctx context.Context, cfg config.Config) *Clients {
 	db, err := newDatabase(ctx, cfg)
 	if err != nil {
-		panic(err)
+		panic(fmt.Errorf("initialize PostgreSQL client: %w", err))
 	}
 
 	cache, err := newCache(ctx, cfg)
 	if err != nil {
 		db.Close()
-		panic(err)
+		panic(fmt.Errorf("initialize Redis client: %w", err))
 	}
 
-	objectStore, presign, err := newObjectStore(ctx, cfg)
+	objectStore, err := newObjectStore(ctx, cfg)
 	if err != nil {
 		db.Close()
-		_ = cache.Close()
-		panic(err)
+		if closeErr := cache.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close Redis client after initialization failure: %w", closeErr))
+		}
+		panic(fmt.Errorf("initialize R2 client: %w", err))
 	}
 
 	return &Clients{
-		DB:      db,
-		Redis:   cache,
-		S3:      objectStore,
-		Presign: presign,
-		bucket:  cfg.R2BucketName,
+		DB:     db,
+		Redis:  cache,
+		S3:     objectStore,
+		bucket: cfg.R2BucketName,
 	}
 }
 

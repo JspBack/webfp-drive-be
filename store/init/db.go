@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/JspBack/webfp-drive/config"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/JspBack/webfp-drive/config"
 )
 
 func newDatabase(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) {
@@ -23,13 +24,13 @@ func newDatabase(ctx context.Context, cfg config.Config) (*pgxpool.Pool, error) 
 	if err != nil {
 		return nil, fmt.Errorf("create PostgreSQL pool: %w", err)
 	}
-	if err := db.Ping(ctx); err != nil {
+	if pingErr := db.Ping(ctx); pingErr != nil {
 		db.Close()
-		return nil, fmt.Errorf("healthcheck PostgreSQL: %w", err)
+		return nil, fmt.Errorf("healthcheck PostgreSQL: %w", pingErr)
 	}
-	if err := initializeSchema(ctx, db); err != nil {
+	if schemaErr := initializeSchema(ctx, db); schemaErr != nil {
 		db.Close()
-		return nil, fmt.Errorf("initialize PostgreSQL schema: %w", err)
+		return nil, fmt.Errorf("initialize PostgreSQL schema: %w", schemaErr)
 	}
 	return db, nil
 }

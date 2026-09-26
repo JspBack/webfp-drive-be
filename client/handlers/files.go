@@ -1,119 +1,116 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/google/uuid"
 
 	authhelper "github.com/JspBack/webfp-drive/helper/auth"
 	httphelper "github.com/JspBack/webfp-drive/helper/http"
+	uploadhelper "github.com/JspBack/webfp-drive/helper/upload"
 	"github.com/JspBack/webfp-drive/store"
-	"github.com/google/uuid"
 )
 
-type createFileRequest struct {
-	Filename    string  `json:"filename"`
-	ContentType string  `json:"content_type"`
-	SizeBytes   int64   `json:"size_bytes"`
-	FolderID    *string `json:"folder_id"`
-}
-
 type updateFileRequest struct {
-	Filename *string `json:"filename"`
+	Filename    *string `json:"filename,omitempty"`
+	FolderID    *string `json:"folder_id,omitempty"`
+	folderIDSet bool
 }
 
-type createFileUploadResponse struct {
-	File      *store.File `json:"file"`
-	UploadURL string      `json:"upload_url"`
+func (req *updateFileRequest) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("decode file update fields: %w", err)
+	}
+	for name, value := range fields {
+		switch name {
+		case "filename":
+			if err := json.Unmarshal(value, &req.Filename); err != nil {
+				return fmt.Errorf("decode filename: %w", err)
+			}
+		case "folder_id":
+			req.folderIDSet = true
+			if err := json.Unmarshal(value, &req.FolderID); err != nil {
+				return fmt.Errorf("decode folder_id: %w", err)
+			}
+		default:
+			return fmt.Errorf("unknown field %q", name)
+		}
+	}
+	return nil
 }
 
-// CreateFileUpload godoc
-// @Summary      Create a file upload
-// @Description  Creates pending file metadata and returns a temporary presigned R2 PUT URL. Upload file bytes directly to that URL, then complete the upload.
+// CreateFile godoc
+// @Summary      Upload a file
+// @Description  Uploads a file as multipart form data through the API server to private R2 storage.
 // @Tags         files
-// @Accept       json
+// @Accept       mpfd
 // @Produce      json
 // @Security     BearerAuth
-// @Param        request  body      createFileRequest  true  "File metadata"
-// @Success      201      {object}  createFileUploadResponse
-// @Failure      400      {object}  map[string]string
-// @Failure      401      {object}  map[string]string
-// @Failure      404      {object}  map[string]string  "Folder not found"
-// @Failure      500      {object}  map[string]string
-// @Router       /api/v1/files [post]
-func (h *Handler) CreateFileUpload(w http.ResponseWriter, r *http.Request) {
+// @Param        file       formData  file    true   "File contents"
+// @Param        folder_id  formData  string  false  "Destination folder UUID"
+// @Success      201        {object}  store.File
+// @Failure      400        {object}  map[string]string
+// @Failure      401        {object}  map[string]string
+// @Failure      404        {object}  map[string]string  "Folder not found"
+// @Failure      413        {object}  map[string]string  "File exceeds configured limit"
+// @Failure      500        {object}  map[string]string
+// @Router       /api/v1/files [post].
+func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
 		return
 	}
-	var req createFileRequest
-	if err := h.decodeJSON(w, r, &req); err != nil {
-		httphelper.Error(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.SizeBytes <= 0 || req.SizeBytes > h.maxFileSize {
-		httphelper.Error(w, http.StatusBadRequest, "file size must be positive and within the configured limit")
-		return
-	}
-	if strings.TrimSpace(req.Filename) == "" {
-		httphelper.Error(w, http.StatusBadRequest, "filename is required")
-		return
-	}
-	var folderID *uuid.UUID
-	if req.FolderID != nil {
-		id, err := uuid.Parse(*req.FolderID)
-		if err != nil {
-			httphelper.Error(w, http.StatusBadRequest, "invalid folder_id")
+	r.Body = http.MaxBytesReader(w, r.Body, h.maxFileSize+h.maxRequestBodyBytes)
+	upload, err := uploadhelper.ParseMultipart(r, h.maxFileSize, h.maxRequestBodyBytes)
+	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.Is(err, uploadhelper.ErrFileTooLarge) || errors.As(err, &maxBytesErr) {
+			httphelper.Error(w, http.StatusRequestEntityTooLarge, "upload request exceeds configured size limit")
 			return
 		}
-		if _, err := h.store.Folders.Get(r.Context(), userID, id); err != nil {
-			if errors.Is(err, store.ErrFolderNotFound) {
-				httphelper.Error(w, http.StatusNotFound, "folder not found")
-				return
-			}
-			h.internalError(w, r, "validate upload folder", err)
+		h.logger.ErrorContext(r.Context(), "parse multipart upload", "error", err)
+		httphelper.Error(w, http.StatusBadRequest, "invalid multipart upload")
+		return
+	}
+	defer func() {
+		if cleanupErr := upload.Cleanup(); cleanupErr != nil {
+			h.logger.ErrorContext(r.Context(), "clean up uploaded file", "error", cleanupErr)
+		}
+	}()
+
+	var folderID *uuid.UUID
+	if upload.FolderID != "" {
+		id, parseErr := uuid.Parse(upload.FolderID)
+		if parseErr != nil {
+			httphelper.Error(w, http.StatusBadRequest, "invalid folder_id")
 			return
 		}
 		folderID = &id
 	}
-	file, uploadURL, err := h.store.Files.CreateUpload(
-		r.Context(), userID, folderID, req.Filename, req.ContentType, req.SizeBytes,
+	if _, seekErr := upload.File.Seek(0, io.SeekStart); seekErr != nil {
+		h.internalError(w, r, "rewind uploaded file", seekErr)
+		return
+	}
+	file, err := h.store.Files.Upload(
+		r.Context(), userID, folderID, upload.Filename, upload.ContentType, upload.Size, upload.File,
 	)
 	if err != nil {
+		if errors.Is(err, store.ErrFolderNotFound) {
+			httphelper.Error(w, http.StatusNotFound, "folder not found")
+			return
+		}
 		h.internalError(w, r, "create file upload", err)
 		return
 	}
-	httphelper.JSON(w, http.StatusCreated, createFileUploadResponse{File: file, UploadURL: uploadURL})
-}
-
-// CompleteFileUpload godoc
-// @Summary      Complete a file upload
-// @Description  Verifies that the uploaded R2 object matches the declared size and marks it ready.
-// @Tags         files
-// @Produce      json
-// @Security     BearerAuth
-// @Param        id   path      string  true  "File UUID"
-// @Success      200  {object}  store.File
-// @Failure      400  {object}  map[string]string
-// @Failure      401  {object}  map[string]string
-// @Failure      404  {object}  map[string]string  "File not found or upload unavailable"
-// @Failure      500  {object}  map[string]string
-// @Router       /api/v1/files/{id}/complete [post]
-func (h *Handler) CompleteFileUpload(w http.ResponseWriter, r *http.Request) {
-	userID, ok := authhelper.AuthenticatedUserID(w, r)
-	if !ok {
-		return
-	}
-	fileID, ok := httphelper.PathUUID(w, r, "id", "invalid file ID")
-	if !ok {
-		return
-	}
-	file, err := h.store.Files.CompleteUpload(r.Context(), userID, fileID)
-	if err != nil {
-		h.fileError(w, r, "complete file upload", err)
-		return
-	}
-	httphelper.JSON(w, http.StatusOK, file)
+	httphelper.JSON(w, http.StatusCreated, file)
 }
 
 // ListFiles godoc
@@ -127,7 +124,7 @@ func (h *Handler) CompleteFileUpload(w http.ResponseWriter, r *http.Request) {
 // @Failure      400        {object}  map[string]string
 // @Failure      401        {object}  map[string]string
 // @Failure      500        {object}  map[string]string
-// @Router       /api/v1/files [get]
+// @Router       /api/v1/files [get].
 func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -147,16 +144,16 @@ func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 
 // GetFile godoc
 // @Summary   Get file metadata
-// @Tags      files
-// @Produce   json
-// @Security  BearerAuth
+// @Tags         files
+// @Produce      json
+// @Security     BearerAuth
 // @Param     id   path      string  true  "File UUID"
 // @Success   200  {object}  store.File
 // @Failure   400  {object}  map[string]string
 // @Failure   401  {object}  map[string]string
 // @Failure   404  {object}  map[string]string
 // @Failure   500  {object}  map[string]string
-// @Router    /api/v1/files/{id} [get]
+// @Router    /api/v1/files/{id} [get].
 func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -176,16 +173,17 @@ func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
 
 // DownloadFile godoc
 // @Summary      Download a file
-// @Description  Redirects to a short-lived presigned R2 download URL.
+// @Description  Streams the file from private R2 storage through the API server.
 // @Tags         files
 // @Security     BearerAuth
-// @Param        id   path  string  true  "File UUID"
-// @Success      307  "Redirect to the presigned download URL"
+// @Param        id  path  string  true  "File UUID"
+// @Produce      octet-stream
+// @Success      200  {file}    file  "File contents"
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
-// @Router       /api/v1/files/{id}/download [get]
+// @Router       /api/v1/files/{id}/download [get].
 func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -195,28 +193,29 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	downloadURL, err := h.store.Files.DownloadURL(r.Context(), userID, fileID)
+	file, body, err := h.store.Files.Download(r.Context(), userID, fileID)
 	if err != nil {
-		h.fileError(w, r, "create file download URL", err)
+		h.fileError(w, r, "download file", err)
 		return
 	}
-	http.Redirect(w, r, downloadURL, http.StatusTemporaryRedirect)
+	h.streamFile(w, r, file, body)
 }
 
 // UpdateFile godoc
-// @Summary   Rename a file
+// @Summary      Rename or move a file
+// @Description  Updates a file name, moves it to a folder, or both. Set folder_id to null to move the file to the root.
 // @Tags      files
-// @Accept    json
+// @Accept       json
 // @Produce   json
 // @Security  BearerAuth
-// @Param     id       path      string             true  "File UUID"
-// @Param     request  body      updateFileRequest  true  "New file name"
-// @Success   200      {object}  store.File
-// @Failure   400      {object}  map[string]string
-// @Failure   401      {object}  map[string]string
-// @Failure   404      {object}  map[string]string
-// @Failure   500      {object}  map[string]string
-// @Router    /api/v1/files/{id} [patch]
+// @Param        id       path      string             true  "File UUID"
+// @Param        request  body      updateFileRequest  true  "File name and/or destination folder"
+// @Success      200      {object}  store.File
+// @Failure      400      {object}  map[string]string
+// @Failure      401      {object}  map[string]string
+// @Failure      404      {object}  map[string]string
+// @Failure      500      {object}  map[string]string
+// @Router       /api/v1/files/{id} [patch].
 func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -231,17 +230,29 @@ func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 		httphelper.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.Filename == nil || strings.TrimSpace(*req.Filename) == "" {
-		httphelper.Error(w, http.StatusBadRequest, "filename is required")
+	if req.Filename == nil && !req.folderIDSet {
+		httphelper.Error(w, http.StatusBadRequest, "provide filename and/or folder_id")
 		return
 	}
-	current, err := h.store.Files.Get(r.Context(), userID, fileID)
-	if err != nil {
-		h.fileError(w, r, "get file for update", err)
+	if req.Filename != nil && strings.TrimSpace(*req.Filename) == "" {
+		httphelper.Error(w, http.StatusBadRequest, "filename must not be empty")
 		return
 	}
-	file, err := h.store.Files.Update(r.Context(), userID, fileID, *req.Filename, current.FolderID)
+	var folderID *uuid.UUID
+	if req.folderIDSet && req.FolderID != nil {
+		id, parseErr := uuid.Parse(*req.FolderID)
+		if parseErr != nil {
+			httphelper.Error(w, http.StatusBadRequest, "invalid folder_id")
+			return
+		}
+		folderID = &id
+	}
+	file, err := h.store.Files.Update(r.Context(), userID, fileID, req.Filename, folderID, req.folderIDSet)
 	if err != nil {
+		if errors.Is(err, store.ErrFolderNotFound) {
+			httphelper.Error(w, http.StatusNotFound, "folder not found")
+			return
+		}
 		h.fileError(w, r, "update file", err)
 		return
 	}
@@ -259,7 +270,7 @@ func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
-// @Router       /api/v1/files/{id} [delete]
+// @Router       /api/v1/files/{id} [delete].
 func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -282,4 +293,31 @@ func (h *Handler) fileError(w http.ResponseWriter, r *http.Request, operation st
 		return
 	}
 	h.internalError(w, r, operation, err)
+}
+
+func (h *Handler) streamFile(w http.ResponseWriter, r *http.Request, file *store.File, body io.ReadCloser) {
+	defer func() {
+		if err := body.Close(); err != nil {
+			h.logger.ErrorContext(r.Context(), "close downloaded R2 object", "error", err)
+		}
+	}()
+
+	contentDisposition := mime.FormatMediaType("attachment", map[string]string{"filename": file.Filename})
+	if contentDisposition == "" {
+		h.internalError(w, r, "format file download headers", fmt.Errorf("invalid file name %q", file.Filename))
+		return
+	}
+	contentType := file.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", contentDisposition)
+	w.Header().Set("Content-Length", strconv.FormatInt(file.SizeBytes, 10))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.WriteHeader(http.StatusOK)
+	if _, err := io.Copy(w, body); err != nil {
+		h.logger.ErrorContext(r.Context(), "stream file download", "error", err)
+	}
 }

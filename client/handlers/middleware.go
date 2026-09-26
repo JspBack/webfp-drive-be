@@ -16,7 +16,7 @@ func (h *Handler) RequireSession(next http.Handler) http.Handler {
 			httphelper.Error(w, http.StatusUnauthorized, "bearer token required")
 			return
 		}
-		userID, err := h.store.Users.ResolveSession(r.Context(), token)
+		userID, sessionID, err := h.store.Users.ResolveSession(r.Context(), token)
 		if err != nil {
 			if errors.Is(err, store.ErrInvalidSession) {
 				httphelper.Error(w, http.StatusUnauthorized, "invalid or expired session")
@@ -25,6 +25,6 @@ func (h *Handler) RequireSession(next http.Handler) http.Handler {
 			h.internalError(w, r, "resolve session", err)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(authhelper.WithSession(r.Context(), userID, token)))
+		next.ServeHTTP(w, r.WithContext(authhelper.WithSession(r.Context(), userID, sessionID, token)))
 	})
 }

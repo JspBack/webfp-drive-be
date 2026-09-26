@@ -1,9 +1,11 @@
 package config
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,14 +20,15 @@ type Config struct {
 	LogLevel             slog.Level
 	Port                 int
 	Timeout              time.Duration
+	TransferTimeout      time.Duration
 	RateLimit            int
 	RateWindow           time.Duration
 	MaxFileSize          int64
 	MaxRequestBodyBytes  int64
 	ShutdownTimeout      time.Duration
-	SessionLifetime      time.Duration
-	UploadURLLifetime    time.Duration
-	DownloadURLLifetime  time.Duration
+	AccessTokenLifetime  time.Duration
+	RefreshTokenLifetime time.Duration
+	PublicHost           string
 	CertFile             string
 	KeyFileTLS           string
 	ConnStr              string
@@ -49,7 +52,7 @@ func Parse() (*Config, error) {
 	fs.SetOutput(os.Stderr)
 	verInfo := fs.Bool("v", false, "show version")
 	if err := fs.Parse(os.Args[1:]); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse command-line flags: %w", err)
 	}
 	if fs.NArg() != 0 {
 		return nil, fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
@@ -64,135 +67,221 @@ func Parse() (*Config, error) {
 	}
 
 	c := &Config{}
-	var err error
-	if c.LogLevel, err = env[slog.Level]("LOG_LEVEL"); err != nil {
+	if err := loadApplicationConfig(c); err != nil {
 		return nil, err
 	}
-	if c.Port, err = env[int]("PORT"); err != nil {
+	if err := loadDatabaseConfig(c); err != nil {
 		return nil, err
 	}
-	if c.Timeout, err = env[time.Duration]("TIMEOUT"); err != nil {
+	if err := loadRedisConfig(c); err != nil {
 		return nil, err
 	}
-	if c.RateLimit, err = env[int]("RATE_LIMIT"); err != nil {
-		return nil, err
-	}
-	if c.RateWindow, err = env[time.Duration]("RATE_WINDOW"); err != nil {
-		return nil, err
-	}
-	if c.MaxFileSize, err = env[int64]("MAX_FILE_SIZE"); err != nil {
-		return nil, err
-	}
-	if c.MaxRequestBodyBytes, err = env[int64]("MAX_REQUEST_BODY_BYTES"); err != nil {
-		return nil, err
-	}
-	if c.ShutdownTimeout, err = env[time.Duration]("SHUTDOWN_TIMEOUT"); err != nil {
-		return nil, err
-	}
-	if c.SessionLifetime, err = env[time.Duration]("SESSION_LIFETIME"); err != nil {
-		return nil, err
-	}
-	if c.UploadURLLifetime, err = env[time.Duration]("UPLOAD_URL_LIFETIME"); err != nil {
-		return nil, err
-	}
-	if c.DownloadURLLifetime, err = env[time.Duration]("DOWNLOAD_URL_LIFETIME"); err != nil {
-		return nil, err
-	}
-	if c.CertFile, err = env[string]("CERT_FILE"); err != nil {
-		return nil, err
-	}
-	if c.KeyFileTLS, err = env[string]("KEY_FILE_TLS"); err != nil {
-		return nil, err
-	}
-	if c.ConnStr, err = env[string]("CONN_STR"); err != nil {
-		return nil, err
-	}
-	if c.DBMaxConns, err = env[int32]("DB_MAX_CONNS"); err != nil {
-		return nil, err
-	}
-	if c.DBMinConns, err = env[int32]("DB_MIN_CONNS"); err != nil {
-		return nil, err
-	}
-	if c.DBMaxConnIdleTime, err = env[time.Duration]("DB_MAX_CONN_IDLE_TIME"); err != nil {
-		return nil, err
-	}
-	if c.DBMaxConnLifetime, err = env[time.Duration]("DB_MAX_CONN_LIFETIME"); err != nil {
-		return nil, err
-	}
-	if c.RedisURL, err = env[string]("REDIS_URL"); err != nil {
-		return nil, err
-	}
-	if c.RedisPoolSize, err = env[int]("REDIS_POOL_SIZE"); err != nil {
-		return nil, err
-	}
-	if c.RedisMinIdleConns, err = env[int]("REDIS_MIN_IDLE_CONNS"); err != nil {
-		return nil, err
-	}
-	if c.RedisPoolTimeout, err = env[time.Duration]("REDIS_POOL_TIMEOUT"); err != nil {
-		return nil, err
-	}
-	if c.RedisConnMaxIdleTime, err = env[time.Duration]("REDIS_CONN_MAX_IDLE_TIME"); err != nil {
-		return nil, err
-	}
-	if c.R2AccountID, err = env[string]("R2_ACCOUNT_ID"); err != nil {
-		return nil, err
-	}
-	if c.R2BucketName, err = env[string]("R2_BUCKET_NAME"); err != nil {
-		return nil, err
-	}
-	if c.R2AccessKeyID, err = env[string]("R2_ACCESS_KEY_ID"); err != nil {
-		return nil, err
-	}
-	if c.R2SecretAccessKey, err = env[string]("R2_SECRET_ACCESS_KEY"); err != nil {
+	if err := loadR2Config(c); err != nil {
 		return nil, err
 	}
 
-	if c.MaxRequestBodyBytes <= 0 {
-		return nil, fmt.Errorf("MAX_REQUEST_BODY_BYTES must be positive")
+	if err := validateConfig(c); err != nil {
+		return nil, err
 	}
-	if c.ShutdownTimeout <= 0 || c.SessionLifetime <= 0 ||
-		c.UploadURLLifetime <= 0 || c.DownloadURLLifetime <= 0 {
-		return nil, fmt.Errorf("SHUTDOWN_TIMEOUT, SESSION_LIFETIME, UPLOAD_URL_LIFETIME, and DOWNLOAD_URL_LIFETIME must be positive")
-	}
-	const maxPresignedURLLifetime = 7 * 24 * time.Hour
-	if c.UploadURLLifetime > maxPresignedURLLifetime || c.DownloadURLLifetime > maxPresignedURLLifetime {
-		return nil, fmt.Errorf("UPLOAD_URL_LIFETIME and DOWNLOAD_URL_LIFETIME must not exceed 168h")
-	}
-
 	return c, nil
 }
 
-func env[T any](key string) (T, error) {
-	var zero T
+func loadApplicationConfig(c *Config) error {
+	var err error
+	if c.LogLevel, err = envLogLevel("LOG_LEVEL"); err != nil {
+		return err
+	}
+	if c.Port, err = envInt("PORT"); err != nil {
+		return err
+	}
+	if c.Timeout, err = envDuration("TIMEOUT"); err != nil {
+		return err
+	}
+	if c.TransferTimeout, err = envDuration("TRANSFER_TIMEOUT"); err != nil {
+		return err
+	}
+	if c.RateLimit, err = envInt("RATE_LIMIT"); err != nil {
+		return err
+	}
+	if c.RateWindow, err = envDuration("RATE_WINDOW"); err != nil {
+		return err
+	}
+	if c.MaxFileSize, err = envInt64("MAX_FILE_SIZE"); err != nil {
+		return err
+	}
+	if c.MaxRequestBodyBytes, err = envInt64("MAX_REQUEST_BODY_BYTES"); err != nil {
+		return err
+	}
+	if c.ShutdownTimeout, err = envDuration("SHUTDOWN_TIMEOUT"); err != nil {
+		return err
+	}
+	if c.AccessTokenLifetime, err = envDuration("ACCESS_TOKEN_LIFETIME"); err != nil {
+		return err
+	}
+	if c.RefreshTokenLifetime, err = envDuration("REFRESH_TOKEN_LIFETIME"); err != nil {
+		return err
+	}
+	c.PublicHost = strings.TrimSpace(os.Getenv("PUBLIC_HOST"))
+	if c.PublicHost != "" {
+		if hostErr := validatePublicHost(c.PublicHost); hostErr != nil {
+			return hostErr
+		}
+	}
+	if c.CertFile, err = envString("CERT_FILE"); err != nil {
+		return err
+	}
+	if c.KeyFileTLS, err = envString("KEY_FILE_TLS"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadDatabaseConfig(c *Config) error {
+	var err error
+	if c.ConnStr, err = envString("CONN_STR"); err != nil {
+		return err
+	}
+	if c.DBMaxConns, err = envInt32("DB_MAX_CONNS"); err != nil {
+		return err
+	}
+	if c.DBMinConns, err = envInt32("DB_MIN_CONNS"); err != nil {
+		return err
+	}
+	if c.DBMaxConnIdleTime, err = envDuration("DB_MAX_CONN_IDLE_TIME"); err != nil {
+		return err
+	}
+	if c.DBMaxConnLifetime, err = envDuration("DB_MAX_CONN_LIFETIME"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadRedisConfig(c *Config) error {
+	var err error
+	if c.RedisURL, err = envString("REDIS_URL"); err != nil {
+		return err
+	}
+	if c.RedisPoolSize, err = envInt("REDIS_POOL_SIZE"); err != nil {
+		return err
+	}
+	if c.RedisMinIdleConns, err = envInt("REDIS_MIN_IDLE_CONNS"); err != nil {
+		return err
+	}
+	if c.RedisPoolTimeout, err = envDuration("REDIS_POOL_TIMEOUT"); err != nil {
+		return err
+	}
+	if c.RedisConnMaxIdleTime, err = envDuration("REDIS_CONN_MAX_IDLE_TIME"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func loadR2Config(c *Config) error {
+	var err error
+	if c.R2AccountID, err = envString("R2_ACCOUNT_ID"); err != nil {
+		return err
+	}
+	if c.R2BucketName, err = envString("R2_BUCKET_NAME"); err != nil {
+		return err
+	}
+	if c.R2AccessKeyID, err = envString("R2_ACCESS_KEY_ID"); err != nil {
+		return err
+	}
+	if c.R2SecretAccessKey, err = envString("R2_SECRET_ACCESS_KEY"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateConfig(c *Config) error {
+	if c.MaxRequestBodyBytes <= 0 {
+		return errors.New("MAX_REQUEST_BODY_BYTES must be positive")
+	}
+	if c.ShutdownTimeout <= 0 || c.AccessTokenLifetime.Milliseconds() <= 0 ||
+		c.RefreshTokenLifetime.Milliseconds() <= 0 ||
+		c.Timeout <= 0 || c.TransferTimeout <= 0 {
+		return errors.New("TIMEOUT, TRANSFER_TIMEOUT, SHUTDOWN_TIMEOUT, ACCESS_TOKEN_LIFETIME, and REFRESH_TOKEN_LIFETIME must be positive")
+	}
+	if c.MaxFileSize <= 0 || c.MaxRequestBodyBytes <= 0 ||
+		c.MaxFileSize > int64(^uint64(0)>>1)-c.MaxRequestBodyBytes {
+		return errors.New("MAX_FILE_SIZE and MAX_REQUEST_BODY_BYTES must be positive and have a safe combined limit")
+	}
+	return nil
+}
+
+func envString(key string) (string, error) {
 	value, ok := os.LookupEnv(key)
 	if !ok {
-		return zero, fmt.Errorf("required environment variable %s is not set", key)
+		return "", fmt.Errorf("required environment variable %s is not set", key)
 	}
+	return value, nil
+}
 
-	var parsed any
-	var err error
-	switch any(zero).(type) {
-	case string:
-		parsed = value
-	case int:
-		parsed, err = strconv.Atoi(value)
-	case int32:
-		var n int64
-		n, err = strconv.ParseInt(value, 10, 32)
-		parsed = int32(n)
-	case int64:
-		parsed, err = strconv.ParseInt(value, 10, 64)
-	case time.Duration:
-		parsed, err = time.ParseDuration(value)
-	case slog.Level:
-		var level slog.Level
-		err = level.UnmarshalText([]byte(value))
-		parsed = level
-	default:
-		return zero, fmt.Errorf("unsupported environment value type %T for %s", zero, key)
-	}
+func envInt(key string) (int, error) {
+	value, err := envString(key)
 	if err != nil {
-		return zero, fmt.Errorf("parse %s: %w", key, err)
+		return 0, err
 	}
-	return parsed.(T), nil
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func envInt32(key string) (int32, error) {
+	value, err := envString(key)
+	if err != nil {
+		return 0, err
+	}
+	parsed, err := strconv.ParseInt(value, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return int32(parsed), nil
+}
+
+func envInt64(key string) (int64, error) {
+	value, err := envString(key)
+	if err != nil {
+		return 0, err
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func envDuration(key string) (time.Duration, error) {
+	value, err := envString(key)
+	if err != nil {
+		return 0, err
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	return parsed, nil
+}
+
+func envLogLevel(key string) (slog.Level, error) {
+	value, err := envString(key)
+	if err != nil {
+		return 0, err
+	}
+	var level slog.Level
+	if parseErr := level.UnmarshalText([]byte(value)); parseErr != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, parseErr)
+	}
+	return level, nil
+}
+
+func validatePublicHost(host string) error {
+	parsed, err := url.Parse("//" + host)
+	if err != nil || parsed.Hostname() == "" || parsed.Host != host ||
+		parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("PUBLIC_HOST must be a hostname, optionally with a port, without a scheme or path")
+	}
+	return nil
 }

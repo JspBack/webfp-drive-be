@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -13,17 +14,34 @@ type Handler struct {
 	logger              *slog.Logger
 	maxFileSize         int64
 	maxRequestBodyBytes int64
+	publicHost          string
+	publicScheme        string
 }
 
-func New(st *store.Store, logger *slog.Logger, maxFileSize, maxRequestBodyBytes int64) *Handler {
+func New(
+	st *store.Store,
+	logger *slog.Logger,
+	maxFileSize, maxRequestBodyBytes int64,
+	publicHost string,
+	useTLS bool,
+) *Handler {
+	scheme := "http"
+	if useTLS {
+		scheme = "https"
+	}
 	return &Handler{
 		store:               st,
 		logger:              logger,
 		maxFileSize:         maxFileSize,
 		maxRequestBodyBytes: maxRequestBodyBytes,
+		publicHost:          publicHost,
+		publicScheme:        scheme,
 	}
 }
 
 func (h *Handler) decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
-	return httphelper.DecodeJSONLimit(w, r, dst, h.maxRequestBodyBytes)
+	if err := httphelper.DecodeJSONLimit(w, r, dst, h.maxRequestBodyBytes); err != nil {
+		return fmt.Errorf("decode request JSON: %w", err)
+	}
+	return nil
 }

@@ -11,11 +11,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	storehelper "github.com/JspBack/webfp-drive/helper/store"
 )
 
 var (
-	ErrFolderNotFound = errors.New("folder not found")
-	ErrFolderNotEmpty = errors.New("folder is not empty")
+	ErrFolderNotFound       = errors.New("folder not found")
+	ErrFolderParentNotFound = errors.New("parent folder not found")
+	ErrFolderNotEmpty       = errors.New("folder is not empty")
+	ErrFolderMoveCycle      = errors.New("folder move would create a cycle")
 )
 
 type Folder struct {
@@ -42,7 +46,7 @@ func scanFolder(row interface{ Scan(...any) error }) (*Folder, error) {
 		&folder.CreatedAt,
 		&folder.UpdatedAt,
 	); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("scan folder row: %w", err)
 	}
 	if parentID.Valid {
 		id, err := uuid.Parse(parentID.String)
@@ -59,7 +63,7 @@ const folderColumns = `id, owner_id, parent_id::text, name, created_at, updated_
 func (fs *FolderStore) Create(ctx context.Context, ownerID uuid.UUID, parentID *uuid.UUID, name string) (*Folder, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, fmt.Errorf("folder name is required")
+		return nil, errors.New("folder name is required")
 	}
 	folder, err := scanFolder(fs.db.QueryRow(ctx, `
 		INSERT INTO folders (id, owner_id, parent_id, name)
@@ -68,6 +72,9 @@ func (fs *FolderStore) Create(ctx context.Context, ownerID uuid.UUID, parentID *
 		uuid.New(), ownerID, parentID, name,
 	))
 	if err != nil {
+		if storehelper.IsForeignKeyViolation(err, "folders_parent_owner_fk") {
+			return nil, ErrFolderParentNotFound
+		}
 		return nil, fmt.Errorf("create folder: %w", err)
 	}
 	return folder, nil
@@ -100,34 +107,85 @@ func (fs *FolderStore) List(ctx context.Context, ownerID uuid.UUID, parentID *uu
 
 	folders := make([]Folder, 0)
 	for rows.Next() {
-		folder, err := scanFolder(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan folder: %w", err)
+		folder, scanErr := scanFolder(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan folder: %w", scanErr)
 		}
 		folders = append(folders, *folder)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate folders: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, fmt.Errorf("iterate folders: %w", rowsErr)
 	}
 	return folders, nil
 }
 
-func (fs *FolderStore) Update(ctx context.Context, ownerID, folderID uuid.UUID, name string) (*Folder, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("folder name is required")
-	}
-	folder, err := scanFolder(fs.db.QueryRow(ctx, `
-		UPDATE folders SET name = $3, updated_at = now()
-		WHERE id = $1 AND owner_id = $2
-		RETURNING `+folderColumns,
-		folderID, ownerID, name,
-	))
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrFolderNotFound
+func (fs *FolderStore) Update(
+	ctx context.Context,
+	ownerID, folderID uuid.UUID,
+	name *string,
+	parentID *uuid.UUID,
+	parentIDSet bool,
+) (*Folder, error) {
+	var nameValue any
+	if name != nil {
+		trimmedName := strings.TrimSpace(*name)
+		if trimmedName == "" {
+			return nil, errors.New("folder name is required")
 		}
-		return nil, fmt.Errorf("update folder: %w", err)
+		nameValue = trimmedName
+	}
+	var folder *Folder
+	err := pgx.BeginFunc(ctx, fs.db, func(tx pgx.Tx) error {
+		var locked bool
+		lockErr := tx.QueryRow(ctx, `
+			SELECT true FROM (SELECT pg_advisory_xact_lock(hashtext($1), 0)) AS folder_tree_lock
+		`, ownerID.String()).Scan(&locked)
+		if lockErr != nil {
+			return fmt.Errorf("lock folder tree for update: %w", lockErr)
+		}
+		if parentIDSet && parentID != nil {
+			var createsCycle bool
+			cycleErr := tx.QueryRow(ctx, `
+				WITH RECURSIVE descendants(id) AS (
+					SELECT id FROM folders WHERE id = $1 AND owner_id = $2
+					UNION
+					SELECT child.id
+					FROM folders child
+					JOIN descendants parent ON child.parent_id = parent.id
+					WHERE child.owner_id = $2
+				)
+				SELECT EXISTS(SELECT 1 FROM descendants WHERE id = $3)
+			`, folderID, ownerID, *parentID).Scan(&createsCycle)
+			if cycleErr != nil {
+				return fmt.Errorf("check folder move destination: %w", cycleErr)
+			}
+			if createsCycle {
+				return ErrFolderMoveCycle
+			}
+		}
+		var updateErr error
+		folder, updateErr = scanFolder(tx.QueryRow(ctx, `
+			UPDATE folders
+			SET name = CASE WHEN $3 THEN $4::text ELSE name END,
+				parent_id = CASE WHEN $5 THEN $6::uuid ELSE parent_id END,
+				updated_at = now()
+			WHERE id = $1 AND owner_id = $2
+			RETURNING `+folderColumns,
+			folderID, ownerID, name != nil, nameValue, parentIDSet, parentID,
+		))
+		if updateErr != nil {
+			if errors.Is(updateErr, pgx.ErrNoRows) {
+				return ErrFolderNotFound
+			}
+			if storehelper.IsForeignKeyViolation(updateErr, "folders_parent_owner_fk") {
+				return ErrFolderParentNotFound
+			}
+			return fmt.Errorf("update folder: %w", updateErr)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update folder transaction: %w", err)
 	}
 	return folder, nil
 }
@@ -143,8 +201,8 @@ func (fs *FolderStore) Delete(ctx context.Context, ownerID, folderID uuid.UUID) 
 		return fmt.Errorf("delete folder: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		if _, err := fs.Get(ctx, ownerID, folderID); err != nil {
-			return err
+		if _, getErr := fs.Get(ctx, ownerID, folderID); getErr != nil {
+			return getErr
 		}
 		return ErrFolderNotEmpty
 	}

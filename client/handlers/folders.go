@@ -1,15 +1,18 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	authhelper "github.com/JspBack/webfp-drive/helper/auth"
 	httphelper "github.com/JspBack/webfp-drive/helper/http"
 	storehelper "github.com/JspBack/webfp-drive/helper/store"
 	"github.com/JspBack/webfp-drive/store"
-	"github.com/google/uuid"
 )
 
 type createFolderRequest struct {
@@ -18,23 +21,48 @@ type createFolderRequest struct {
 }
 
 type updateFolderRequest struct {
-	Name string `json:"name"`
+	Name        *string `json:"name,omitempty"`
+	ParentID    *string `json:"parent_id,omitempty"`
+	parentIDSet bool
+}
+
+func (req *updateFolderRequest) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("decode folder update fields: %w", err)
+	}
+	for name, value := range fields {
+		switch name {
+		case "name":
+			if err := json.Unmarshal(value, &req.Name); err != nil {
+				return fmt.Errorf("decode name: %w", err)
+			}
+		case "parent_id":
+			req.parentIDSet = true
+			if err := json.Unmarshal(value, &req.ParentID); err != nil {
+				return fmt.Errorf("decode parent_id: %w", err)
+			}
+		default:
+			return fmt.Errorf("unknown field %q", name)
+		}
+	}
+	return nil
 }
 
 // CreateFolder godoc
 // @Summary   Create a folder
-// @Tags      folders
-// @Accept    json
-// @Produce   json
-// @Security  BearerAuth
+// @Tags         folders
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
 // @Param     request  body      createFolderRequest  true  "Folder details"
 // @Success   201      {object}  store.Folder
-// @Failure   400      {object}  map[string]string
-// @Failure   401      {object}  map[string]string
-// @Failure   404      {object}  map[string]string  "Parent folder not found"
-// @Failure   409      {object}  map[string]string  "Folder name already exists"
-// @Failure   500      {object}  map[string]string
-// @Router    /api/v1/folders [post]
+// @Failure      400      {object}  map[string]string
+// @Failure      401      {object}  map[string]string
+// @Failure      404      {object}  map[string]string  "Parent folder not found"
+// @Failure      409      {object}  map[string]string  "Folder name already exists"
+// @Failure      500      {object}  map[string]string
+// @Router    /api/v1/folders [post].
 func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -56,16 +84,16 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 			httphelper.Error(w, http.StatusBadRequest, "invalid parent_id")
 			return
 		}
-		if _, err := h.store.Folders.Get(r.Context(), userID, id); err != nil {
-			h.folderError(w, r, "get parent folder", err)
-			return
-		}
 		parentID = &id
 	}
 	folder, err := h.store.Folders.Create(r.Context(), userID, parentID, req.Name)
 	if err != nil {
 		if storehelper.IsUniqueViolation(err) {
 			httphelper.Error(w, http.StatusConflict, "folder with this name already exists")
+			return
+		}
+		if errors.Is(err, store.ErrFolderParentNotFound) {
+			httphelper.Error(w, http.StatusNotFound, "parent folder not found")
 			return
 		}
 		h.internalError(w, r, "create folder", err)
@@ -85,7 +113,7 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 // @Failure      400        {object}  map[string]string
 // @Failure      401        {object}  map[string]string
 // @Failure      500        {object}  map[string]string
-// @Router       /api/v1/folders [get]
+// @Router       /api/v1/folders [get].
 func (h *Handler) ListFolders(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -114,7 +142,7 @@ func (h *Handler) ListFolders(w http.ResponseWriter, r *http.Request) {
 // @Failure   401  {object}  map[string]string
 // @Failure   404  {object}  map[string]string
 // @Failure   500  {object}  map[string]string
-// @Router    /api/v1/folders/{id} [get]
+// @Router    /api/v1/folders/{id} [get].
 func (h *Handler) GetFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -133,20 +161,21 @@ func (h *Handler) GetFolder(w http.ResponseWriter, r *http.Request) {
 }
 
 // UpdateFolder godoc
-// @Summary   Rename a folder
+// @Summary      Rename or move a folder
+// @Description  Renames or moves a folder. Set parent_id to null for root; folders cannot move into themselves or descendants.
 // @Tags      folders
 // @Accept    json
 // @Produce   json
 // @Security  BearerAuth
-// @Param     id       path      string               true  "Folder UUID"
-// @Param     request  body      updateFolderRequest  true  "New folder name"
-// @Success   200      {object}  store.Folder
+// @Param        id       path      string               true  "Folder UUID"
+// @Param        request  body      updateFolderRequest  true  "Folder name and/or destination parent"
+// @Success      200      {object}  store.Folder
 // @Failure   400      {object}  map[string]string
 // @Failure   401      {object}  map[string]string
 // @Failure   404      {object}  map[string]string
 // @Failure   409      {object}  map[string]string  "Folder name already exists"
 // @Failure   500      {object}  map[string]string
-// @Router    /api/v1/folders/{id} [patch]
+// @Router       /api/v1/folders/{id} [patch].
 func (h *Handler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -161,14 +190,37 @@ func (h *Handler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 		httphelper.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
-		httphelper.Error(w, http.StatusBadRequest, "folder name is required")
+	if req.Name == nil && !req.parentIDSet {
+		httphelper.Error(w, http.StatusBadRequest, "provide name and/or parent_id")
 		return
 	}
-	folder, err := h.store.Folders.Update(r.Context(), userID, folderID, req.Name)
+	if req.Name != nil && strings.TrimSpace(*req.Name) == "" {
+		httphelper.Error(w, http.StatusBadRequest, "folder name must not be empty")
+		return
+	}
+	var parentID *uuid.UUID
+	if req.parentIDSet && req.ParentID != nil {
+		id, parseErr := uuid.Parse(*req.ParentID)
+		if parseErr != nil {
+			httphelper.Error(w, http.StatusBadRequest, "invalid parent_id")
+			return
+		}
+		parentID = &id
+	}
+	folder, err := h.store.Folders.Update(
+		r.Context(), userID, folderID, req.Name, parentID, req.parentIDSet,
+	)
 	if err != nil {
 		if storehelper.IsUniqueViolation(err) {
 			httphelper.Error(w, http.StatusConflict, "folder with this name already exists")
+			return
+		}
+		if errors.Is(err, store.ErrFolderMoveCycle) {
+			httphelper.Error(w, http.StatusBadRequest, "cannot move a folder into itself or one of its descendants")
+			return
+		}
+		if errors.Is(err, store.ErrFolderParentNotFound) {
+			httphelper.Error(w, http.StatusNotFound, "parent folder not found")
 			return
 		}
 		h.folderError(w, r, "update folder", err)
@@ -189,7 +241,7 @@ func (h *Handler) UpdateFolder(w http.ResponseWriter, r *http.Request) {
 // @Failure      404  {object}  map[string]string
 // @Failure      409  {object}  map[string]string  "Folder is not empty"
 // @Failure      500  {object}  map[string]string
-// @Router       /api/v1/folders/{id} [delete]
+// @Router       /api/v1/folders/{id} [delete].
 func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {

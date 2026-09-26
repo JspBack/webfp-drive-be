@@ -1,6 +1,6 @@
 // @title                       WebFP Drive API
 // @version                     1.0
-// @description                 API for account, file, folder, and share management. Use bearer sessions in the Authorization header as Bearer <token>.
+// @description                 API for account, file, folder, and share management.
 // @BasePath                    /
 // @schemes                     http https
 // @securityDefinitions.apikey  BearerAuth
@@ -9,18 +9,21 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/JspBack/webfp-drive/client"
 	"github.com/JspBack/webfp-drive/config"
 )
 
 func main() {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cfg, err := config.Parse()
 	if err != nil {
-		slog.Error("load configuration", "error", err)
+		logger.Error("load configuration", "error", err)
 		os.Exit(1)
 	}
 	l := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
@@ -28,11 +31,11 @@ func main() {
 
 	l.Debug("client created successfully")
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	go func() {
-		<-sig
+		<-ctx.Done()
 		l.Info("shutting down...")
 		cl.Shutdown()
 	}()

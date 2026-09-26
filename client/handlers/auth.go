@@ -18,8 +18,13 @@ type credentialsRequest struct {
 }
 
 type authResponse struct {
-	User  *store.User `json:"user"`
-	Token string      `json:"token"`
+	User         *store.User `json:"user,omitempty"`
+	Token        string      `json:"token"`
+	RefreshToken string      `json:"refresh_token"`
+}
+
+type refreshRequest struct {
+	RefreshToken string `json:"refresh_token"`
 }
 
 type updateUserRequest struct {
@@ -27,9 +32,11 @@ type updateUserRequest struct {
 	Name  *string `json:"name"`
 }
 
+const minimumPasswordLength = 8
+
 // Register godoc
 // @Summary      Register an account
-// @Description  Creates a password-based account and starts a session.
+// @Description  Creates an account and returns a 10-minute access token and 24-hour refresh token.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -38,7 +45,7 @@ type updateUserRequest struct {
 // @Failure      400      {object}  map[string]string
 // @Failure      409      {object}  map[string]string  "Email already registered"
 // @Failure      500      {object}  map[string]string
-// @Router       /api/v1/auth/register [post]
+// @Router       /api/v1/auth/register [post].
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if err := h.decodeJSON(w, r, &req); err != nil {
@@ -51,7 +58,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		httphelper.Error(w, http.StatusBadRequest, "valid email is required")
 		return
 	}
-	if len(req.Password) < 8 {
+	if len(req.Password) < minimumPasswordLength {
 		httphelper.Error(w, http.StatusBadRequest, "password must be at least 8 characters")
 		return
 	}
@@ -65,17 +72,19 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, r, "register user", err)
 		return
 	}
-	token, err := h.store.Users.CreateSession(r.Context(), user.ID)
+	tokens, err := h.store.Users.CreateSession(r.Context(), user.ID)
 	if err != nil {
 		h.internalError(w, r, "create registration session", err)
 		return
 	}
-	httphelper.JSON(w, http.StatusCreated, authResponse{User: user, Token: token})
+	httphelper.JSON(w, http.StatusCreated, authResponse{
+		User: user, Token: tokens.AccessToken, RefreshToken: tokens.RefreshToken,
+	})
 }
 
 // Login godoc
 // @Summary      Log in
-// @Description  Authenticates with email and password and returns a bearer session token.
+// @Description  Authenticates and returns a 10-minute access token and 24-hour refresh token.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
@@ -84,7 +93,7 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 // @Failure      400      {object}  map[string]string
 // @Failure      401      {object}  map[string]string  "Invalid credentials"
 // @Failure      500      {object}  map[string]string
-// @Router       /api/v1/auth/login [post]
+// @Router       /api/v1/auth/login [post].
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
 	if err := h.decodeJSON(w, r, &req); err != nil {
@@ -100,12 +109,50 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, r, "authenticate user", err)
 		return
 	}
-	token, err := h.store.Users.CreateSession(r.Context(), user.ID)
+	tokens, err := h.store.Users.CreateSession(r.Context(), user.ID)
 	if err != nil {
 		h.internalError(w, r, "create login session", err)
 		return
 	}
-	httphelper.JSON(w, http.StatusOK, authResponse{User: user, Token: token})
+	httphelper.JSON(w, http.StatusOK, authResponse{
+		User: user, Token: tokens.AccessToken, RefreshToken: tokens.RefreshToken,
+	})
+}
+
+// Refresh godoc
+// @Summary      Refresh an access token
+// @Description  Exchanges a valid refresh token for a new 10-minute access token and a rotated 24-hour refresh token.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        request  body      refreshRequest  true  "Refresh token"
+// @Success      200      {object}  authResponse
+// @Failure      400      {object}  map[string]string
+// @Failure      401      {object}  map[string]string  "Refresh token is invalid or expired"
+// @Failure      500      {object}  map[string]string
+// @Router       /api/v1/auth/refresh [post].
+func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
+	var req refreshRequest
+	if err := h.decodeJSON(w, r, &req); err != nil {
+		httphelper.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(req.RefreshToken) == "" {
+		httphelper.Error(w, http.StatusBadRequest, "refresh_token is required")
+		return
+	}
+	tokens, err := h.store.Users.RefreshSession(r.Context(), req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidSession) {
+			httphelper.Error(w, http.StatusUnauthorized, "refresh token is invalid or expired")
+			return
+		}
+		h.internalError(w, r, "refresh session", err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, authResponse{
+		Token: tokens.AccessToken, RefreshToken: tokens.RefreshToken,
+	})
 }
 
 // Logout godoc
@@ -117,10 +164,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // @Success      204  "Session revoked"
 // @Failure      401  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
-// @Router       /api/v1/auth/logout [post]
+// @Router       /api/v1/auth/logout [post].
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	token, _ := authhelper.SessionToken(r.Context())
-	if err := h.store.Users.RevokeSession(r.Context(), token); err != nil {
+	sessionID, _ := authhelper.SessionID(r.Context())
+	if err := h.store.Users.RevokeSession(r.Context(), token, sessionID); err != nil {
 		h.internalError(w, r, "revoke session", err)
 		return
 	}
@@ -140,7 +188,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 // @Failure   404      {object}  map[string]string
 // @Failure   409      {object}  map[string]string  "Email already registered"
 // @Failure   500      {object}  map[string]string
-// @Router    /api/v1/users/me [patch]
+// @Router    /api/v1/users/me [patch].
 func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
@@ -202,7 +250,7 @@ func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 // @Failure   401  {object}  map[string]string
 // @Failure   404  {object}  map[string]string
 // @Failure   500  {object}  map[string]string
-// @Router    /api/v1/users/me [get]
+// @Router    /api/v1/users/me [get].
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
 	if !ok {
