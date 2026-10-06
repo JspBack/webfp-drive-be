@@ -1,0 +1,21 @@
+# vcs
+.github
+.pre-commit-config.yaml
+.golangci.yaml
+
+# secrets
+.env
+.env.*
+client_secret*.json
+
+# build
+bin/
+.venv/
+coverage.out
+
+# generated
+docs/
+
+deploy/
+*.md
+makefile
