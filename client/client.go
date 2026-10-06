@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -30,12 +29,9 @@ type Client struct {
 	MaxRequestBodyBytes int64
 	ShutdownTimeout     time.Duration
 	publicHost          string
+	publicScheme        string
 	githubOAuth         *authhelper.GitHubOAuth
 	googleOAuth         *authhelper.GoogleOAuth
-
-	tlsConfig  *tls.Config
-	certFile   string
-	keyFileTLS string
 
 	srv *http.Server
 }
@@ -45,22 +41,7 @@ type Info struct {
 	ProfilePic uuid.UUID
 }
 
-func loadTLSConfig(cfg config.Config) *tls.Config {
-	if cfg.CertFile == "" || cfg.KeyFileTLS == "" {
-		if cfg.CertFile != "" || cfg.KeyFileTLS != "" {
-			panic("both CERT_FILE and KEY_FILE_TLS must be configured to enable TLS")
-		}
-		return nil
-	}
-	cert, err := tls.LoadX509KeyPair(cfg.CertFile, cfg.KeyFileTLS)
-	if err != nil {
-		panic(fmt.Errorf("load TLS certificate: %w", err))
-	}
-	return &tls.Config{Certificates: []tls.Certificate{cert}}
-}
-
 func New(cfg config.Config, logger *slog.Logger) *Client {
-	tlsConfig := loadTLSConfig(cfg)
 	st := store.New(cfg)
 	c := &Client{
 		Store:               st,
@@ -74,11 +55,9 @@ func New(cfg config.Config, logger *slog.Logger) *Client {
 		MaxRequestBodyBytes: cfg.MaxRequestBodyBytes,
 		ShutdownTimeout:     cfg.ShutdownTimeout,
 		publicHost:          cfg.PublicHost,
+		publicScheme:        cfg.PublicScheme,
 		githubOAuth:         newGitHubOAuth(cfg),
 		googleOAuth:         newGoogleOAuth(cfg),
-		tlsConfig:           tlsConfig,
-		certFile:            cfg.CertFile,
-		keyFileTLS:          cfg.KeyFileTLS,
 	}
 
 	return c
@@ -103,9 +82,9 @@ func newGoogleOAuth(cfg config.Config) *authhelper.GoogleOAuth {
 }
 
 func oauthRedirectURL(cfg config.Config) string {
-	scheme := "http"
-	if cfg.CertFile != "" && cfg.KeyFileTLS != "" {
-		scheme = "https"
+	scheme := cfg.PublicScheme
+	if scheme != config.SchemeHTTP && scheme != config.SchemeHTTPS {
+		scheme = config.SchemeHTTP
 	}
 	host := cfg.PublicHost
 	if host == "" {
@@ -114,8 +93,8 @@ func oauthRedirectURL(cfg config.Config) string {
 	return scheme + "://" + host + "/api/v1/callback"
 }
 
-func (c *Client) UseTLS() bool {
-	return c.tlsConfig != nil
+func (c *Client) publicHTTPS() bool {
+	return c.publicScheme == config.SchemeHTTPS
 }
 
 func (c *Client) Listen() {
@@ -132,13 +111,7 @@ func (c *Client) Listen() {
 		IdleTimeout:       c.Timeout,
 	}
 	c.log.Info("listening", "addr", addr)
-	var serveErr error
-	if c.UseTLS() {
-		serveErr = c.srv.ListenAndServeTLS(c.certFile, c.keyFileTLS)
-	} else {
-		serveErr = c.srv.ListenAndServe()
-	}
-	if serveErr != nil && serveErr != http.ErrServerClosed {
+	if serveErr := c.srv.ListenAndServe(); serveErr != nil && serveErr != http.ErrServerClosed {
 		c.log.Error("listen", "err", serveErr)
 	}
 }

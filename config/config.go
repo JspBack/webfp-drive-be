@@ -20,6 +20,8 @@ const (
 	DefaultUserStorageLimitBytes   int64   = 500 * 1024 * 1024
 	DefaultSystemStorageLimitBytes int64   = 10 * 1024 * 1024 * 1024 // 10GB
 	DefaultSystemLockThreshold     float64 = 0.80
+	SchemeHTTP                     string  = "http"
+	SchemeHTTPS                    string  = "https"
 )
 
 type Config struct {
@@ -38,8 +40,7 @@ type Config struct {
 	AccessTokenLifetime        time.Duration
 	RefreshTokenLifetime       time.Duration
 	PublicHost                 string
-	CertFile                   string
-	KeyFileTLS                 string
+	PublicScheme               string
 	ConnStr                    string
 	DBReadReplicaConnStr       string
 	DBSchema                   string
@@ -155,11 +156,12 @@ func loadApplicationConfig(c *Config) error {
 			return hostErr
 		}
 	}
-	if c.CertFile, err = envString("CERT_FILE"); err != nil {
-		return err
+	c.PublicScheme = strings.ToLower(strings.TrimSpace(os.Getenv("PUBLIC_SCHEME")))
+	if c.PublicScheme == "" {
+		c.PublicScheme = SchemeHTTP
 	}
-	if c.KeyFileTLS, err = envString("KEY_FILE_TLS"); err != nil {
-		return err
+	if c.PublicScheme != SchemeHTTP && c.PublicScheme != SchemeHTTPS {
+		return errors.New("PUBLIC_SCHEME must be http or https")
 	}
 	return nil
 }
@@ -255,7 +257,7 @@ func validateAbsoluteURL(value string) error {
 		return errors.New("must be set")
 	}
 	parsed, err := url.ParseRequestURI(value)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	if err != nil || parsed.Host == "" || (parsed.Scheme != SchemeHTTP && parsed.Scheme != SchemeHTTPS) {
 		return errors.New("must be an absolute http(s) URL")
 	}
 	return nil

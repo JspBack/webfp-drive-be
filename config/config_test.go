@@ -15,7 +15,8 @@ func TestLoadApplicationConfig(t *testing.T) {
 		"MAX_FILE_SIZE": "52428800", "MAX_REQUEST_BODY_BYTES": "1048576",
 		"SHUTDOWN_TIMEOUT": "5s", "ACCESS_TOKEN_LIFETIME": "10m",
 		"REFRESH_TOKEN_LIFETIME": "24h", "PUBLIC_HOST": "drive.example.com:8443",
-		"CERT_FILE": "", "KEY_FILE_TLS": "", "USER_STORAGE_LIMIT_BYTES": "",
+		"PUBLIC_SCHEME":            "https",
+		"USER_STORAGE_LIMIT_BYTES": "",
 	})
 
 	var got Config
@@ -27,6 +28,9 @@ func TestLoadApplicationConfig(t *testing.T) {
 	}
 	if got.LogLevel != slog.LevelDebug || got.Port != 8081 || got.PublicHost != "drive.example.com:8443" {
 		t.Errorf("unexpected application settings: %+v", got)
+	}
+	if got.PublicScheme != "https" {
+		t.Errorf("PublicScheme = %q, want https", got.PublicScheme)
 	}
 	if got.Timeout != 15*time.Second || got.TransferTimeout != 30*time.Minute {
 		t.Errorf("unexpected timeouts: %s, %s", got.Timeout, got.TransferTimeout)
@@ -43,6 +47,7 @@ func TestLoadApplicationConfigRejectsInvalidValues(t *testing.T) {
 		{"port", "PORT", "not-a-number"},
 		{"timeout", "TIMEOUT", "soon"},
 		{"public host", "PUBLIC_HOST", "https://example.com"},
+		{"public scheme", "PUBLIC_SCHEME", "ftp"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -52,7 +57,6 @@ func TestLoadApplicationConfigRejectsInvalidValues(t *testing.T) {
 				"MAX_FILE_SIZE": "52428800", "MAX_REQUEST_BODY_BYTES": "1048576",
 				"SHUTDOWN_TIMEOUT": "5s", "ACCESS_TOKEN_LIFETIME": "10m",
 				"REFRESH_TOKEN_LIFETIME": "24h", "PUBLIC_HOST": "",
-				"CERT_FILE": "", "KEY_FILE_TLS": "",
 				test.key: test.val,
 			})
 			if err := loadApplicationConfig(&Config{}); err == nil {
@@ -69,7 +73,6 @@ func TestLoadApplicationConfigStorageLimit(t *testing.T) {
 		"MAX_FILE_SIZE": "52428800", "MAX_REQUEST_BODY_BYTES": "1048576",
 		"SHUTDOWN_TIMEOUT": "5s", "ACCESS_TOKEN_LIFETIME": "10m",
 		"REFRESH_TOKEN_LIFETIME": "24h", "PUBLIC_HOST": "",
-		"CERT_FILE": "", "KEY_FILE_TLS": "",
 		"USER_STORAGE_LIMIT_BYTES": " 1048576 ",
 	})
 	var got Config

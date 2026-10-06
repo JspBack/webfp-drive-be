@@ -12,7 +12,7 @@ import (
 func (c *Client) registerRoutes(mux *http.ServeMux) {
 	h := handlers.New(
 		c.Store, c.log, c.MaxFileSize, c.MaxRequestBodyBytes,
-		c.publicHost, c.UseTLS(), c.githubOAuth, c.googleOAuth,
+		c.publicHost, c.publicHTTPS(), c.githubOAuth, c.googleOAuth,
 	)
 	mux.Handle("GET /swagger", http.RedirectHandler("/swagger/index.html", http.StatusTemporaryRedirect))
 	mux.Handle("GET /swagger/", httpSwagger.Handler(

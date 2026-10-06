@@ -20,13 +20,18 @@ func TestOAuthRedirectURL(t *testing.T) {
 		},
 		{
 			name: "public host",
-			cfg:  config.Config{Port: 8080, PublicHost: "drive.example.com"},
-			want: "http://drive.example.com/api/v1/callback",
+			cfg:  config.Config{Port: 8080, PublicHost: "drive.example.com:8443"},
+			want: "http://drive.example.com:8443/api/v1/callback",
 		},
 		{
-			name: "tls",
-			cfg:  config.Config{Port: 8443, PublicHost: "drive.example.com:8443", CertFile: "cert.pem", KeyFileTLS: "key.pem"},
-			want: "https://drive.example.com:8443/api/v1/callback",
+			name: "public scheme https",
+			cfg:  config.Config{Port: 8080, PublicHost: "webfp.dpdns.org", PublicScheme: "https"},
+			want: "https://webfp.dpdns.org/api/v1/callback",
+		},
+		{
+			name: "public host without port",
+			cfg:  config.Config{Port: 8080, PublicHost: "drive.example.com"},
+			want: "http://drive.example.com/api/v1/callback",
 		},
 	}
 	for _, test := range tests {

@@ -7,10 +7,7 @@ import (
 	"github.com/JspBack/webfp-drive/client"
 )
 
-func TestUseTLSAndShutdownWithoutServer(t *testing.T) {
+func TestShutdownWithoutServer(_ *testing.T) {
 	instance := &client.Client{ShutdownTimeout: time.Second}
-	if instance.UseTLS() {
-		t.Fatal("UseTLS() = true without TLS configuration")
-	}
 	instance.Shutdown()
 }
