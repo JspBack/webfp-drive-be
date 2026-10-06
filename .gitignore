@@ -1,0 +1,12 @@
+# binary
+bin*
+
+# virtual env
+.venv/
+
+# env files
+.env*
+!.env.example
+
+# docs
+docs/
