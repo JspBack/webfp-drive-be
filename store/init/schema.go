@@ -126,6 +126,10 @@ func createSchema(ctx context.Context, db *pgxpool.Pool, schema string) error {
 		queries[i] = strings.ReplaceAll(queries[i], "webfp.", qualifiedSchema+".")
 	}
 
+	return execStatements(ctx, db, queries)
+}
+
+func execStatements(ctx context.Context, db *pgxpool.Pool, queries []string) error {
 	if err := pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
 		for i, statement := range queries {
 			if _, execErr := tx.Exec(ctx, statement); execErr != nil {

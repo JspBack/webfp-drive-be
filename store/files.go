@@ -416,7 +416,9 @@ func (fs *FileStore) enforceSystemLockOnWrite(ctx context.Context, tx pgx.Tx) er
 
 	var locked bool
 	var total int64
-	if err := tx.QueryRow(ctx, `SELECT locked, COALESCE(total_bytes, 0) FROM `+fs.table("fs_lock")+` WHERE lock_id = true`).Scan(&locked, &total); err != nil {
+	lockStateQuery := `SELECT locked, COALESCE(total_bytes, 0)
+		FROM ` + fs.table("fs_lock") + ` WHERE lock_id = true`
+	if err := tx.QueryRow(ctx, lockStateQuery).Scan(&locked, &total); err != nil {
 		return fmt.Errorf("read fs lock state: %w", err)
 	}
 	if locked {

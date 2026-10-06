@@ -17,50 +17,50 @@ import (
 var Version = "placeholder"
 
 const (
-	DefaultUserStorageLimitBytes   int64 = 500 * 1024 * 1024
-	DefaultSystemStorageLimitBytes int64 = 10 * 1024 * 1024 * 1024 // 10GB
+	DefaultUserStorageLimitBytes   int64   = 500 * 1024 * 1024
+	DefaultSystemStorageLimitBytes int64   = 10 * 1024 * 1024 * 1024 // 10GB
 	DefaultSystemLockThreshold     float64 = 0.80
 )
 
 type Config struct {
-	LogLevel                    slog.Level
-	Port                        int
-	Timeout                     time.Duration
-	TransferTimeout             time.Duration
-	RateLimit                   int
-	RateWindow                  time.Duration
-	MaxFileSize                 int64
-	MaxRequestBodyBytes         int64
-	UserStorageLimitBytes       int64
-	SystemStorageLimitBytes     int64
-	SystemStorageLockThreshold  float64
-	ShutdownTimeout             time.Duration
-	AccessTokenLifetime   time.Duration
-	RefreshTokenLifetime  time.Duration
-	PublicHost            string
-	CertFile              string
-	KeyFileTLS            string
-	ConnStr               string
-	DBReadReplicaConnStr  string
-	DBSchema              string
-	DBMaxConns            int32
-	DBMinConns            int32
-	DBMaxConnIdleTime     time.Duration
-	DBMaxConnLifetime     time.Duration
-	RedisURL              string
-	RedisPoolSize         int
-	RedisMinIdleConns     int
-	RedisPoolTimeout      time.Duration
-	RedisConnMaxIdleTime  time.Duration
-	R2AccountID           string
-	R2BucketName          string
-	R2AccessKeyID         string
-	R2SecretAccessKey     string
-	GitHubClientID        string
-	GitHubClientSecret    string
-	GoogleClientID        string
-	GoogleClientSecret    string
-	OAuthReturnURL        string
+	LogLevel                   slog.Level
+	Port                       int
+	Timeout                    time.Duration
+	TransferTimeout            time.Duration
+	RateLimit                  int
+	RateWindow                 time.Duration
+	MaxFileSize                int64
+	MaxRequestBodyBytes        int64
+	UserStorageLimitBytes      int64
+	SystemStorageLimitBytes    int64
+	SystemStorageLockThreshold float64
+	ShutdownTimeout            time.Duration
+	AccessTokenLifetime        time.Duration
+	RefreshTokenLifetime       time.Duration
+	PublicHost                 string
+	CertFile                   string
+	KeyFileTLS                 string
+	ConnStr                    string
+	DBReadReplicaConnStr       string
+	DBSchema                   string
+	DBMaxConns                 int32
+	DBMinConns                 int32
+	DBMaxConnIdleTime          time.Duration
+	DBMaxConnLifetime          time.Duration
+	RedisURL                   string
+	RedisPoolSize              int
+	RedisMinIdleConns          int
+	RedisPoolTimeout           time.Duration
+	RedisConnMaxIdleTime       time.Duration
+	R2AccountID                string
+	R2BucketName               string
+	R2AccessKeyID              string
+	R2SecretAccessKey          string
+	GitHubClientID             string
+	GitHubClientSecret         string
+	GoogleClientID             string
+	GoogleClientSecret         string
+	OAuthReturnURL             string
 }
 
 func Parse() (*Config, error) {
