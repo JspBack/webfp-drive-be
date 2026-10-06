@@ -21,6 +21,7 @@ import (
 var (
 	ErrNotFound             = errors.New("file not found")
 	ErrStorageLimitExceeded = errors.New("storage limit exceeded")
+	ErrSystemLocked         = errors.New("system storage lock is active")
 )
 
 type File struct {
@@ -39,11 +40,13 @@ type File struct {
 
 type FileStore struct {
 	schemaTables
-	s3           *s3.Client
-	db           *pgxpool.Pool
-	readDB       *pgxpool.Pool
-	bucket       string
-	storageLimit int64
+	s3                         *s3.Client
+	db                         *pgxpool.Pool
+	readDB                     *pgxpool.Pool
+	bucket                     string
+	storageLimit               int64
+	systemStorageLimit         int64
+	systemStorageLockThreshold float64
 }
 
 type rowScanner interface {
@@ -106,7 +109,13 @@ func (fs *FileStore) Upload(
 	objectKey := fmt.Sprintf("users/%s/%s", ownerID, fileID)
 	var file *File
 	err := withTransaction(ctx, fs.db, "file upload", func(tx pgx.Tx) error {
+		if err := fs.checkSystemLock(ctx, tx); err != nil {
+			return err
+		}
 		if err := fs.reserveQuota(ctx, tx, ownerID, sizeBytes); err != nil {
+			return err
+		}
+		if err := fs.enforceSystemLockOnWrite(ctx, tx); err != nil {
 			return err
 		}
 		scanned, scanErr := scanFile(tx.QueryRow(ctx, `
@@ -297,15 +306,26 @@ func (fs *FileStore) Update(
 	if filename != nil {
 		filenameValue = strings.TrimSpace(*filename)
 	}
-	file, err := scanFile(fs.db.QueryRow(ctx, `
-		UPDATE `+fs.table("files")+`
-		SET filename = CASE WHEN $3 THEN $4::text ELSE filename END,
-			folder_id = CASE WHEN $5 THEN $6::uuid ELSE folder_id END,
-			updated_at = now()
-		WHERE id = $1 AND owner_id = $2
-		RETURNING `+fileColumns,
-		fileID, ownerID, filename != nil, filenameValue, folderIDSet, folderID,
-	))
+	var file *File
+	err := withTransaction(ctx, fs.db, "file update", func(tx pgx.Tx) error {
+		if err := fs.checkSystemLock(ctx, tx); err != nil {
+			return err
+		}
+		scanned, scanErr := scanFile(tx.QueryRow(ctx, `
+			UPDATE `+fs.table("files")+`
+			SET filename = CASE WHEN $3 THEN $4::text ELSE filename END,
+				folder_id = CASE WHEN $5 THEN $6::uuid ELSE folder_id END,
+				updated_at = now()
+			WHERE id = $1 AND owner_id = $2
+			RETURNING `+fileColumns,
+			fileID, ownerID, filename != nil, filenameValue, folderIDSet, folderID,
+		))
+		if scanErr != nil {
+			return scanErr
+		}
+		file = scanned
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -371,6 +391,64 @@ func (fs *FileStore) Delete(ctx context.Context, ownerID, fileID uuid.UUID) erro
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+func (fs *FileStore) checkSystemLock(ctx context.Context, tx pgx.Tx) error {
+	if fs.systemStorageLimit <= 0 {
+		return nil
+	}
+	var locked bool
+	if err := tx.QueryRow(ctx, `SELECT locked FROM `+fs.table("fs_lock")+` WHERE lock_id = true`).Scan(&locked); err != nil {
+		return fmt.Errorf("check fs lock: %w", err)
+	}
+	if locked {
+		return ErrSystemLocked
+	}
+	return nil
+}
+
+func (fs *FileStore) enforceSystemLockOnWrite(ctx context.Context, tx pgx.Tx) error {
+	if fs.systemStorageLimit <= 0 {
+		return nil
+	}
+
+	var locked bool
+	var total int64
+	if err := tx.QueryRow(ctx, `SELECT locked, COALESCE(total_bytes, 0) FROM `+fs.table("fs_lock")+` WHERE lock_id = true`).Scan(&locked, &total); err != nil {
+		return fmt.Errorf("read fs lock state: %w", err)
+	}
+	if locked {
+		return ErrSystemLocked
+	}
+
+	var used int64
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(SUM(size_bytes), 0) FROM `+fs.table("files")+``).Scan(&used); err != nil {
+		return fmt.Errorf("read total storage usage: %w", err)
+	}
+
+	if used > total {
+		total = used
+	}
+	threshold := float64(total) / float64(fs.systemStorageLimit)
+	if threshold >= fs.systemStorageLockThreshold {
+		if _, err := tx.Exec(ctx, `
+			UPDATE `+fs.table("fs_lock")+`
+			SET locked = true, locked_at = now(), total_bytes = $1, threshold_hit_percent = $2, updated_at = now()
+			WHERE lock_id = true AND locked = false
+		`, used, threshold); err != nil {
+			return fmt.Errorf("lock fs: %w", err)
+		}
+		return ErrSystemLocked
+	}
+
+	if _, err := tx.Exec(ctx, `
+		UPDATE `+fs.table("fs_lock")+`
+		SET total_bytes = $1, updated_at = now()
+		WHERE lock_id = true
+	`, used); err != nil {
+		return fmt.Errorf("update fs lock totals: %w", err)
 	}
 	return nil
 }

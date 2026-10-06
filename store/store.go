@@ -24,12 +24,14 @@ func New(cfg cfg.Config) *Store {
 	clients := storeinit.New(ctx, cfg)
 	schema := schemaTables(cfg.DBSchema)
 	files := &FileStore{
-		schemaTables: schema,
-		s3:           clients.S3,
-		db:           clients.DB,
-		readDB:       clients.ReadDB,
-		bucket:       cfg.R2BucketName,
-		storageLimit: cfg.UserStorageLimitBytes,
+		schemaTables:               schema,
+		s3:                         clients.S3,
+		db:                         clients.DB,
+		readDB:                     clients.ReadDB,
+		bucket:                     cfg.R2BucketName,
+		storageLimit:               cfg.UserStorageLimitBytes,
+		systemStorageLimit:         cfg.SystemStorageLimitBytes,
+		systemStorageLockThreshold: cfg.SystemStorageLockThreshold,
 	}
 
 	return &Store{

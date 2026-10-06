@@ -113,6 +113,10 @@ func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("storage limit exceeded: this file would pass your %d byte limit", limit))
 			return
 		}
+		if errors.Is(err, store.ErrSystemLocked) {
+			httphelper.Error(w, http.StatusServiceUnavailable, "system storage limit reached; file operations are temporarily locked")
+			return
+		}
 		h.internalError(w, r, "create file upload", err)
 		return
 	}
@@ -257,6 +261,10 @@ func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, store.ErrFolderNotFound) {
 			httphelper.Error(w, http.StatusNotFound, "folder not found")
+			return
+		}
+		if errors.Is(err, store.ErrSystemLocked) {
+			httphelper.Error(w, http.StatusServiceUnavailable, "system storage limit reached; file operations are temporarily locked")
 			return
 		}
 		h.fileError(w, r, "update file", err)

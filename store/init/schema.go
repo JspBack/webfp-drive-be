@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var requiredTables = []string{"users", "auth_identities", "folders", "files"}
+var requiredTables = []string{"users", "auth_identities", "folders", "files", "fs_lock"}
 
 func initializeSchema(ctx context.Context, db *pgxpool.Pool, schema string) error {
 	var schemaExists bool
@@ -111,6 +111,16 @@ func createSchema(ctx context.Context, db *pgxpool.Pool, schema string) error {
 		)`,
 		`CREATE INDEX files_owner_listing_idx
 			ON webfp.files (owner_id, folder_id, created_at DESC)`,
+		`CREATE TABLE webfp.fs_lock (
+			lock_id BOOLEAN PRIMARY KEY DEFAULT true,
+			locked BOOLEAN NOT NULL DEFAULT false,
+			locked_at TIMESTAMPTZ,
+			total_bytes BIGINT NOT NULL DEFAULT 0,
+			threshold_hit_percent NUMERIC(5,4) NOT NULL DEFAULT 0,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			CONSTRAINT fs_lock_singleton CHECK (lock_id = true)
+		)`,
+		`INSERT INTO webfp.fs_lock (lock_id, locked, total_bytes, threshold_hit_percent) VALUES (true, false, 0, 0) ON CONFLICT DO NOTHING`,
 	}
 	for i := range queries {
 		queries[i] = strings.ReplaceAll(queries[i], "webfp.", qualifiedSchema+".")

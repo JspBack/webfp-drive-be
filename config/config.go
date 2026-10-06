@@ -16,19 +16,25 @@ import (
 
 var Version = "placeholder"
 
-const DefaultUserStorageLimitBytes int64 = 500 * 1024 * 1024
+const (
+	DefaultUserStorageLimitBytes   int64 = 500 * 1024 * 1024
+	DefaultSystemStorageLimitBytes int64 = 10 * 1024 * 1024 * 1024 // 10GB
+	DefaultSystemLockThreshold     float64 = 0.80
+)
 
 type Config struct {
-	LogLevel              slog.Level
-	Port                  int
-	Timeout               time.Duration
-	TransferTimeout       time.Duration
-	RateLimit             int
-	RateWindow            time.Duration
-	MaxFileSize           int64
-	MaxRequestBodyBytes   int64
-	UserStorageLimitBytes int64
-	ShutdownTimeout       time.Duration
+	LogLevel                    slog.Level
+	Port                        int
+	Timeout                     time.Duration
+	TransferTimeout             time.Duration
+	RateLimit                   int
+	RateWindow                  time.Duration
+	MaxFileSize                 int64
+	MaxRequestBodyBytes         int64
+	UserStorageLimitBytes       int64
+	SystemStorageLimitBytes     int64
+	SystemStorageLockThreshold  float64
+	ShutdownTimeout             time.Duration
 	AccessTokenLifetime   time.Duration
 	RefreshTokenLifetime  time.Duration
 	PublicHost            string
@@ -126,6 +132,12 @@ func loadApplicationConfig(c *Config) error {
 		return err
 	}
 	if c.UserStorageLimitBytes, err = envInt64Default("USER_STORAGE_LIMIT_BYTES", DefaultUserStorageLimitBytes); err != nil {
+		return err
+	}
+	if c.SystemStorageLimitBytes, err = envInt64Default("SYSTEM_STORAGE_LIMIT_BYTES", DefaultSystemStorageLimitBytes); err != nil {
+		return err
+	}
+	if c.SystemStorageLockThreshold, err = envFloat64Default("SYSTEM_STORAGE_LOCK_THRESHOLD", DefaultSystemLockThreshold); err != nil {
 		return err
 	}
 	if c.ShutdownTimeout, err = envDuration("SHUTDOWN_TIMEOUT"); err != nil {
@@ -358,4 +370,19 @@ func validatePublicHost(host string) error {
 		return errors.New("PUBLIC_HOST must be a hostname, optionally with a port, without a scheme or path")
 	}
 	return nil
+}
+
+func envFloat64Default(key string, fallback float64) (float64, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(value) == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s: %w", key, err)
+	}
+	if parsed < 0 || parsed > 1 {
+		return 0, fmt.Errorf("%s must be between 0 and 1", key)
+	}
+	return parsed, nil
 }
