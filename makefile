@@ -25,10 +25,14 @@ image:
 
 deploy-gke:
 	kubectl apply -f deploy/ns.yaml
-	kubectl -n webfp create secret generic webfp-be-env --from-file=.env=.env.gke --dry-run=client -o yaml | kubectl apply -f -
+	@if [ -f .env.gke ]; then \
+		kubectl -n webfp create secret generic webfp-be-env --from-file=.env=.env.gke --dry-run=client -o yaml | kubectl apply -f -; \
+	else \
+		echo "no .env.gke (running in CI) - keeping existing cluster secret"; \
+	fi
 	kubectl apply -f deploy/
 	kubectl -n webfp rollout restart statefulset/webfp-be
-	kubectl -n webfp rollout status statefulset/webfp-be --timeout=180s
+	kubectl -n webfp rollout status statefulset/webfp-be --timeout=300s
 pre-all:
 	pre-commit run --all-files
 configure-pre-commit:
