@@ -29,11 +29,16 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
 
-      - name: Install pre-commit system tools
+      - name: Install CI tools
         run: |
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          go install github.com/swaggo/swag/cmd/swag@v1.8.1
           go install golang.org/x/tools/cmd/goimports@v0.51.0
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+
+      - name: generate swagger docs
+        run: |
+          "$(go env GOPATH)/bin/swag" init -g main.go -d cmd,client/handlers,store -o docs --parseInternal
 
       - name: pre-commit
         uses: pre-commit/action@v3.0.1
