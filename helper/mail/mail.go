@@ -1,24 +1,30 @@
-// Package mail delivers account emails through the Mailtrap API. A client
-// built without an API token reports ErrNotConfigured so callers can fall back
-// to logging instead of failing registration.
+// Package mail delivers account emails through an SMTP relay (Gmail by
+// default). A client built without credentials reports ErrNotConfigured so
+// callers can fall back to logging instead of failing registration.
 package mail
 
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	_ "embed"
 	"errors"
 	"fmt"
 	"html/template"
+	"mime"
+	"mime/multipart"
+	"mime/quotedprintable"
+	"net"
+	"net/mail"
+	"net/smtp"
+	"net/textproto"
 	"time"
-
-	"github.com/mailtrap/mailtrap-go"
 )
 
 //go:embed verify_email.html
 var verificationHTML string
 
-// ErrNotConfigured reports that no API token is available for sending.
+// ErrNotConfigured reports that no SMTP credentials are available for sending.
 var ErrNotConfigured = errors.New("mail delivery is not configured")
 
 // VerificationRequest describes one verification-code email.
@@ -30,27 +36,47 @@ type VerificationRequest struct {
 	SiteURL string
 }
 
-// Client sends email through Mailtrap; the zero value is disabled.
+// Client sends email over SMTP; the zero value is disabled.
 type Client struct {
-	api     *mailtrap.Client
-	from    mailtrap.Address
-	enabled bool
+	host     string
+	port     string
+	user     string
+	password string
+	fromAddr string
+	fromName string
+	enabled  bool
 }
 
-// New builds a Mailtrap client. An empty token yields a disabled client with
-// no error so local development can run without credentials.
-func New(token, fromEmail, fromName string) (*Client, error) {
-	if token == "" {
+// New builds an SMTP client. Empty credentials yield a disabled client with no
+// error so local development can run without a mail server. Host and port
+// default to Gmail's STARTTLS endpoint.
+func New(host, port, user, password, fromEmail, fromName string) (*Client, error) {
+	if user == "" || password == "" {
 		return &Client{}, nil
 	}
-	api, err := mailtrap.NewClient(token)
-	if err != nil {
-		return nil, fmt.Errorf("create mailtrap client: %w", err)
+	if host == "" {
+		host = "smtp.gmail.com"
+	}
+	if port == "" {
+		port = "587"
+	}
+	if fromEmail == "" {
+		fromEmail = user
+	}
+	if _, err := mail.ParseAddress(fromEmail); err != nil {
+		return nil, fmt.Errorf("parse from address: %w", err)
+	}
+	if fromName == "" {
+		fromName = "WebFP Drive"
 	}
 	return &Client{
-		api:     api,
-		from:    mailtrap.Address{Email: fromEmail, Name: fromName},
-		enabled: true,
+		host:     host,
+		port:     port,
+		user:     user,
+		password: password,
+		fromAddr: fromEmail,
+		fromName: fromName,
+		enabled:  true,
 	}, nil
 }
 
@@ -64,22 +90,115 @@ func (c *Client) SendVerification(ctx context.Context, req VerificationRequest) 
 	if !c.Enabled() {
 		return ErrNotConfigured
 	}
-	body, err := renderVerificationHTML(req)
+	htmlBody, err := renderVerificationHTML(req)
 	if err != nil {
 		return err
 	}
-	_, _, err = c.api.Send(ctx, &mailtrap.SendRequest{
-		From:     c.from,
-		To:       []mailtrap.Address{{Email: req.ToEmail, Name: req.ToName}},
-		Subject:  "Verify your email address",
-		Text:     verificationText(req),
-		HTML:     body,
-		Category: "Email Verification",
-	})
+	msg, err := buildMessage(c.fromAddr, c.fromName, req.ToEmail,
+		"Verify your email address", verificationText(req), htmlBody)
 	if err != nil {
+		return err
+	}
+	if err = c.send(ctx, req.ToEmail, msg); err != nil {
 		return fmt.Errorf("send verification email: %w", err)
 	}
 	return nil
+}
+
+// send speaks enough SMTP for Gmail's STARTTLS endpoint: EHLO, STARTTLS,
+// AUTH PLAIN, MAIL/RCPT/DATA, honoring any deadline on ctx.
+func (c *Client) send(ctx context.Context, to string, msg []byte) error {
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(c.host, c.port))
+	if err != nil {
+		return fmt.Errorf("connect to %s:%s: %w", c.host, c.port, err)
+	}
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+
+	client, err := smtp.NewClient(conn, c.host)
+	if err != nil {
+		return fmt.Errorf("smtp client: %w", err)
+	}
+	defer client.Close()
+
+	if ok, _ := client.Extension("STARTTLS"); ok {
+		if err = client.StartTLS(&tls.Config{ServerName: c.host}); err != nil {
+			return fmt.Errorf("starttls: %w", err)
+		}
+	}
+	if err = client.Auth(smtp.PlainAuth("", c.user, c.password, c.host)); err != nil {
+		return fmt.Errorf("auth: %w", err)
+	}
+	if err = client.Mail(c.fromAddr); err != nil {
+		return fmt.Errorf("mail from: %w", err)
+	}
+	if err = client.Rcpt(to); err != nil {
+		return fmt.Errorf("rcpt to: %w", err)
+	}
+	writer, dataErr := client.Data()
+	if dataErr != nil {
+		return fmt.Errorf("data: %w", dataErr)
+	}
+	if _, err = writer.Write(msg); err != nil {
+		return fmt.Errorf("write message: %w", err)
+	}
+	if err = writer.Close(); err != nil {
+		return fmt.Errorf("finish message: %w", err)
+	}
+	if err = client.Quit(); err != nil {
+		return fmt.Errorf("quit: %w", err)
+	}
+	return nil
+}
+
+// buildMessage assembles a multipart/alternative MIME message.
+func buildMessage(fromEmail, fromName, to, subject, textBody, htmlBody string) ([]byte, error) {
+	var head bytes.Buffer
+	fmt.Fprintf(&head, "From: %s\r\n", (&mail.Address{Name: fromName, Address: fromEmail}).String())
+	fmt.Fprintf(&head, "To: %s\r\n", (&mail.Address{Address: to}).String())
+	fmt.Fprintf(&head, "Subject: %s\r\n", mime.QEncoding.Encode("utf-8", subject))
+	fmt.Fprintf(&head, "Date: %s\r\n", time.Now().Format(time.RFC1123Z))
+	fmt.Fprintf(&head, "MIME-Version: 1.0\r\n")
+
+	var body bytes.Buffer
+	multipartWriter := multipart.NewWriter(&body)
+	fmt.Fprintf(&head, "Content-Type: multipart/alternative; boundary=%q\r\n\r\n",
+		multipartWriter.Boundary())
+
+	parts := []struct {
+		contentType string
+		payload     string
+	}{
+		{"text/plain; charset=UTF-8", textBody},
+		{"text/html; charset=UTF-8", htmlBody},
+	}
+	for _, part := range parts {
+		partWriter, err := multipartWriter.CreatePart(textproto.MIMEHeader{
+			"Content-Type":              {part.contentType},
+			"Content-Transfer-Encoding": {"quoted-printable"},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("create multipart part: %w", err)
+		}
+		quoted := quotedprintable.NewWriter(partWriter)
+		if _, err = quoted.Write([]byte(part.payload)); err != nil {
+			return nil, fmt.Errorf("encode part: %w", err)
+		}
+		if err = quoted.Close(); err != nil {
+			return nil, fmt.Errorf("finish part: %w", err)
+		}
+	}
+	if err := multipartWriter.Close(); err != nil {
+		return nil, fmt.Errorf("close multipart: %w", err)
+	}
+
+	var msg bytes.Buffer
+	msg.Write(head.Bytes())
+	msg.Write(body.Bytes())
+	return msg.Bytes(), nil
 }
 
 type verificationTemplateData struct {

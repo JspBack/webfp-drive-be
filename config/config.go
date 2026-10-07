@@ -63,9 +63,12 @@ type Config struct {
 	GoogleClientID             string
 	GoogleClientSecret         string
 	OAuthReturnURL             string
-	MailtrapAPIToken           string
-	MailtrapFromEmail          string
-	MailtrapFromName           string
+	SMTPHost                   string
+	SMTPPort                   string
+	SMTPUser                   string
+	SMTPPassword               string
+	SMTPFromEmail              string
+	SMTPFromName               string
 }
 
 func Parse() (*Config, error) {
@@ -103,7 +106,7 @@ func Parse() (*Config, error) {
 	if err := loadAuthConfig(c); err != nil {
 		return nil, err
 	}
-	if err := loadMailConfig(c); err != nil {
+	if err := loadSMTPConfig(c); err != nil {
 		return nil, err
 	}
 
@@ -259,21 +262,30 @@ func loadAuthConfig(c *Config) error {
 	return nil
 }
 
-func loadMailConfig(c *Config) error {
-	c.MailtrapAPIToken = strings.TrimSpace(os.Getenv("MAILTRAP_API_TOKEN"))
-	c.MailtrapFromEmail = strings.TrimSpace(os.Getenv("MAILTRAP_FROM_EMAIL"))
-	c.MailtrapFromName = strings.TrimSpace(os.Getenv("MAILTRAP_FROM_NAME"))
-	if c.MailtrapAPIToken == "" {
+func loadSMTPConfig(c *Config) error {
+	c.SMTPHost = strings.TrimSpace(os.Getenv("SMTP_HOST"))
+	c.SMTPPort = strings.TrimSpace(os.Getenv("SMTP_PORT"))
+	c.SMTPUser = strings.TrimSpace(os.Getenv("SMTP_USER"))
+	c.SMTPPassword = strings.TrimSpace(os.Getenv("SMTP_PASSWORD"))
+	c.SMTPFromEmail = strings.TrimSpace(os.Getenv("SMTP_FROM_EMAIL"))
+	c.SMTPFromName = strings.TrimSpace(os.Getenv("SMTP_FROM_NAME"))
+	if c.SMTPUser == "" && c.SMTPPassword == "" {
 		return nil
 	}
-	if c.MailtrapFromEmail == "" {
-		return errors.New("MAILTRAP_FROM_EMAIL is required when MAILTRAP_API_TOKEN is set")
+	if c.SMTPUser == "" {
+		return errors.New("SMTP_USER is required when SMTP_PASSWORD is set")
 	}
-	if _, err := mail.ParseAddress(c.MailtrapFromEmail); err != nil {
-		return fmt.Errorf("MAILTRAP_FROM_EMAIL: %w", err)
+	if c.SMTPPassword == "" {
+		return errors.New("SMTP_PASSWORD is required when SMTP_USER is set")
 	}
-	if c.MailtrapFromName == "" {
-		c.MailtrapFromName = "WebFP Drive"
+	if c.SMTPFromEmail == "" {
+		c.SMTPFromEmail = c.SMTPUser
+	}
+	if _, err := mail.ParseAddress(c.SMTPFromEmail); err != nil {
+		return fmt.Errorf("SMTP_FROM_EMAIL: %w", err)
+	}
+	if c.SMTPFromName == "" {
+		c.SMTPFromName = "WebFP Drive"
 	}
 	return nil
 }

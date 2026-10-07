@@ -45,7 +45,7 @@ type Info struct {
 
 func New(cfg config.Config, logger *slog.Logger) *Client {
 	st := store.New(cfg)
-	mailer, err := mail.New(cfg.MailtrapAPIToken, cfg.MailtrapFromEmail, cfg.MailtrapFromName)
+	mailer, err := mail.New(cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, cfg.SMTPPassword, cfg.SMTPFromEmail, cfg.SMTPFromName)
 	if err != nil {
 		logger.Warn("email delivery disabled", "error", err)
 		mailer = nil
