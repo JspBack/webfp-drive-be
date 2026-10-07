@@ -133,5 +133,8 @@ jobs:
           cluster_name: webfp
           location: europe-west1
 
+      - name: Restore env file from cluster
+        run: kubectl get secret webfp-be-env -n webfp -o jsonpath='{.data.env}' | base64 -d > .env.gke
+
       - name: Rolling deploy to GKE
         run: make deploy-gke
