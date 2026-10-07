@@ -22,14 +22,9 @@ docs:
 	swag init -g main.go -d cmd,client/handlers,store -o docs --parseInternal
 image:
 	docker build --build-arg VERSION=$(VERSION) -t webfp-be:$(VERSION) .
-
 deploy-gke:
 	kubectl apply -f deploy/ns.yaml
-	@if [ -f .env.gke ]; then \
-		kubectl -n webfp create secret generic webfp-be-env --from-file=.env=.env.gke --dry-run=client -o yaml | kubectl apply -f -; \
-	else \
-		echo "no .env.gke (running in CI) - keeping existing cluster secret"; \
-	fi
+	kubectl -n webfp create secret generic webfp-be-env --from-file=.env=.env.gke --dry-run=client -o yaml | kubectl apply -f -; \
 	kubectl apply -f deploy/
 	kubectl -n webfp rollout restart statefulset/webfp-be
 	kubectl -n webfp rollout status statefulset/webfp-be --timeout=300s
