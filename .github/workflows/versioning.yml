@@ -118,18 +118,20 @@ jobs:
   deploy:
     needs: publish
     runs-on: ubuntu-latest
-    env:
-      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Authenticate to GCP and get cluster credentials
-        env:
-          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-        run: |
-          printf '%s' "$GCP_SA_KEY" > "${RUNNER_TEMP}/gcp-sa.json"
-          gcloud auth activate-service-account --key-file="${RUNNER_TEMP}/gcp-sa.json" --quiet
-          gcloud container clusters get-credentials webfp --region europe-west1 --project "${GCP_PROJECT_ID}"
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v3
+        with:
+          cluster_name: webfp
+          location: europe-west1
 
       - name: Rolling deploy to GKE
         run: make deploy-gke
