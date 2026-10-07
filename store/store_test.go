@@ -28,8 +28,11 @@ func TestStoreInputValidation(t *testing.T) {
 	if _, err := (&store.UserStore{}).Add(ctx, "email", "name", ""); err == nil {
 		t.Fatal("Add() accepted empty password")
 	}
-	if _, err := (&store.UserStore{}).Update(ctx, uuid.New(), " ", "name"); err == nil {
-		t.Fatal("Update() accepted empty email")
+	if err := (&store.UserStore{}).SetVerificationCode(ctx, " ", "123456", time.Minute); err == nil {
+		t.Fatal("SetVerificationCode() accepted empty email")
+	}
+	if err := (&store.UserStore{}).SetVerificationCode(ctx, "user@example.com", "123456", 0); err == nil {
+		t.Fatal("SetVerificationCode() accepted zero ttl")
 	}
 }
 

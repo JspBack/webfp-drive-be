@@ -27,21 +27,30 @@ func TestSwaggerUI(t *testing.T) {
 func TestSwaggerEndpointCoverage(t *testing.T) {
 	spec := swaggerDocument(t)
 	want := map[string][]string{
-		"/api/v1/auth/register":       {"post"},
-		"/api/v1/auth/login":          {"post"},
-		"/api/v1/auth/refresh":        {"post"},
-		"/api/v1/auth/logout":         {"post"},
-		"/api/v1/users/me":            {"get", "patch"},
-		"/api/v1/files":               {"get", "post"},
-		"/api/v1/files/{id}":          {"get", "patch", "delete"},
-		"/api/v1/files/{id}/download": {"get"},
-		"/api/v1/files/{id}/shares":   {"post"},
-		"/api/v1/folders":             {"get", "post"},
-		"/api/v1/folders/{id}":        {"get", "patch", "delete"},
-		"/api/v1/shares/{id}":         {"delete"},
+		"/api/v1/auth/register":            {"post"},
+		"/api/v1/auth/login":               {"post"},
+		"/api/v1/auth/verify-email":        {"post"},
+		"/api/v1/auth/resend-verification": {"post"},
+		"/api/v1/auth/refresh":             {"post"},
+		"/api/v1/auth/logout":              {"post"},
+		"/api/v1/users/me":                 {"get"},
+		"/api/v1/users/me/usage":           {"get"},
+		"/api/v1/files":                    {"get", "post"},
+		"/api/v1/files/{id}":               {"patch", "delete"},
+		"/api/v1/files/{id}/download":      {"get"},
+		"/api/v1/files/{id}/shares":        {"post"},
+		"/api/v1/folders":                  {"get", "post"},
+		"/api/v1/folders/{id}":             {"get", "patch", "delete"},
+		"/api/v1/shares/{id}":              {"delete"},
 	}
 	if _, documented := spec.Paths["/api/health"]; documented {
 		t.Error("internal health endpoint should not be included in Swagger")
+	}
+	if _, documented := spec.Paths["/api/v1/users/me"]["patch"]; documented {
+		t.Error("removed PATCH /api/v1/users/me is still defined in Swagger")
+	}
+	if _, documented := spec.Paths["/api/v1/files/{id}"]["get"]; documented {
+		t.Error("removed GET /api/v1/files/{id} is still defined in Swagger")
 	}
 	for path, methods := range want {
 		for _, method := range methods {

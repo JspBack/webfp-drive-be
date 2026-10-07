@@ -152,35 +152,6 @@ func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, files)
 }
 
-// GetFile godoc
-// @Summary   Get file metadata
-// @Tags         files
-// @Produce      json
-// @Security     BearerAuth
-// @Param     id   path      string  true  "File UUID"
-// @Success   200  {object}  store.File
-// @Failure   400  {object}  map[string]string
-// @Failure   401  {object}  map[string]string
-// @Failure   404  {object}  map[string]string
-// @Failure   500  {object}  map[string]string
-// @Router    /api/v1/files/{id} [get].
-func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
-	userID, ok := authhelper.AuthenticatedUserID(w, r)
-	if !ok {
-		return
-	}
-	fileID, ok := httphelper.PathUUID(w, r, "id", "invalid file ID")
-	if !ok {
-		return
-	}
-	file, err := h.store.Files.Get(r.Context(), userID, fileID)
-	if err != nil {
-		h.fileError(w, r, "get file", err)
-		return
-	}
-	httphelper.JSON(w, http.StatusOK, file)
-}
-
 // DownloadFile godoc
 // @Summary      Download a file
 // @Description  Streams the file from private R2 storage through the API server.
@@ -214,10 +185,10 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 // UpdateFile godoc
 // @Summary      Rename or move a file
 // @Description  Updates a file name, moves it to a folder, or both. Set folder_id to null to move the file to the root.
-// @Tags      files
+// @Tags         files
 // @Accept       json
-// @Produce   json
-// @Security  BearerAuth
+// @Produce      json
+// @Security     BearerAuth
 // @Param        id       path      string             true  "File UUID"
 // @Param        request  body      updateFileRequest  true  "File name and/or destination folder"
 // @Success      200      {object}  store.File

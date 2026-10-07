@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/mail"
 	"net/url"
 	"os"
 	"strconv"
@@ -62,6 +63,9 @@ type Config struct {
 	GoogleClientID             string
 	GoogleClientSecret         string
 	OAuthReturnURL             string
+	MailtrapAPIToken           string
+	MailtrapFromEmail          string
+	MailtrapFromName           string
 }
 
 func Parse() (*Config, error) {
@@ -97,6 +101,9 @@ func Parse() (*Config, error) {
 		return nil, err
 	}
 	if err := loadAuthConfig(c); err != nil {
+		return nil, err
+	}
+	if err := loadMailConfig(c); err != nil {
 		return nil, err
 	}
 
@@ -248,6 +255,25 @@ func loadAuthConfig(c *Config) error {
 	}
 	if err := validateAbsoluteURL(c.OAuthReturnURL); err != nil {
 		return fmt.Errorf("OAUTH_RETURN_URL: %w", err)
+	}
+	return nil
+}
+
+func loadMailConfig(c *Config) error {
+	c.MailtrapAPIToken = strings.TrimSpace(os.Getenv("MAILTRAP_API_TOKEN"))
+	c.MailtrapFromEmail = strings.TrimSpace(os.Getenv("MAILTRAP_FROM_EMAIL"))
+	c.MailtrapFromName = strings.TrimSpace(os.Getenv("MAILTRAP_FROM_NAME"))
+	if c.MailtrapAPIToken == "" {
+		return nil
+	}
+	if c.MailtrapFromEmail == "" {
+		return errors.New("MAILTRAP_FROM_EMAIL is required when MAILTRAP_API_TOKEN is set")
+	}
+	if _, err := mail.ParseAddress(c.MailtrapFromEmail); err != nil {
+		return fmt.Errorf("MAILTRAP_FROM_EMAIL: %w", err)
+	}
+	if c.MailtrapFromName == "" {
+		c.MailtrapFromName = "WebFP Drive"
 	}
 	return nil
 }

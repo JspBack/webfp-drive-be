@@ -14,6 +14,7 @@ import (
 
 	"github.com/JspBack/webfp-drive/config"
 	authhelper "github.com/JspBack/webfp-drive/helper/auth"
+	"github.com/JspBack/webfp-drive/helper/mail"
 	"github.com/JspBack/webfp-drive/store"
 )
 
@@ -32,6 +33,7 @@ type Client struct {
 	publicScheme        string
 	githubOAuth         *authhelper.GitHubOAuth
 	googleOAuth         *authhelper.GoogleOAuth
+	mailer              *mail.Client
 
 	srv *http.Server
 }
@@ -43,6 +45,11 @@ type Info struct {
 
 func New(cfg config.Config, logger *slog.Logger) *Client {
 	st := store.New(cfg)
+	mailer, err := mail.New(cfg.MailtrapAPIToken, cfg.MailtrapFromEmail, cfg.MailtrapFromName)
+	if err != nil {
+		logger.Warn("email delivery disabled", "error", err)
+		mailer = nil
+	}
 	c := &Client{
 		Store:               st,
 		listenPort:          cfg.Port,
@@ -58,6 +65,7 @@ func New(cfg config.Config, logger *slog.Logger) *Client {
 		publicScheme:        cfg.PublicScheme,
 		githubOAuth:         newGitHubOAuth(cfg),
 		googleOAuth:         newGoogleOAuth(cfg),
+		mailer:              mailer,
 	}
 
 	return c

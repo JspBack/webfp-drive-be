@@ -1,14 +1,20 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 
 	authhelper "github.com/JspBack/webfp-drive/helper/auth"
 	httphelper "github.com/JspBack/webfp-drive/helper/http"
+	"github.com/JspBack/webfp-drive/helper/mail"
 	"github.com/JspBack/webfp-drive/store"
 )
+
+type Mailer interface {
+	SendVerification(ctx context.Context, req mail.VerificationRequest) error
+}
 
 type Handler struct {
 	store               *store.Store
@@ -19,6 +25,7 @@ type Handler struct {
 	publicScheme        string
 	githubOAuth         *authhelper.GitHubOAuth
 	googleOAuth         *authhelper.GoogleOAuth
+	mail                Mailer
 }
 
 func New(
@@ -29,6 +36,7 @@ func New(
 	useTLS bool,
 	githubOAuth *authhelper.GitHubOAuth,
 	googleOAuth *authhelper.GoogleOAuth,
+	mailer Mailer,
 ) *Handler {
 	scheme := "http"
 	if useTLS {
@@ -43,6 +51,7 @@ func New(
 		publicScheme:        scheme,
 		githubOAuth:         githubOAuth,
 		googleOAuth:         googleOAuth,
+		mail:                mailer,
 	}
 }
 

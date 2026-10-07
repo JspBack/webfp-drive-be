@@ -65,11 +65,12 @@ return 1
 )
 
 type User struct {
-	ID        uuid.UUID `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID            uuid.UUID `json:"id"`
+	Email         string    `json:"email"`
+	Name          string    `json:"name"`
+	EmailVerified bool      `json:"email_verified"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type UserStore struct {
@@ -85,12 +86,12 @@ func (us *UserStore) Authenticate(ctx context.Context, email, password string) (
 	user := &User{}
 	var passwordHash string
 	err := us.db.QueryRow(ctx, `
-		SELECT u.id, u.email, u.name, u.created_at, u.updated_at, a.password_hash
+		SELECT u.id, u.email, u.name, u.email_verified, u.created_at, u.updated_at, a.password_hash
 		FROM `+us.table("users")+` u
 		JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
 		WHERE a.provider = 'password' AND a.provider_subject = $1
 	`, email).Scan(
-		&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt, &passwordHash,
+		&user.ID, &user.Email, &user.Name, &user.EmailVerified, &user.CreatedAt, &user.UpdatedAt, &passwordHash,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -115,11 +116,11 @@ func (us *UserStore) OAuthLogin(ctx context.Context, provider, subject, email, n
 	user := &User{}
 	err := withTransaction(ctx, us.db, provider+" user login", func(tx pgx.Tx) error {
 		lookupErr := tx.QueryRow(ctx, `
-			SELECT u.id, COALESCE(u.email, ''), u.name, u.created_at, u.updated_at
+			SELECT u.id, COALESCE(u.email, ''), u.name, u.email_verified, u.created_at, u.updated_at
 			FROM `+us.table("users")+` u
 			JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
 			WHERE a.provider = $2 AND a.provider_subject = $1
-		`, subject, provider).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+		`, subject, provider).Scan(&user.ID, &user.Email, &user.Name, &user.EmailVerified, &user.CreatedAt, &user.UpdatedAt)
 		if lookupErr == nil {
 			return nil
 		}
@@ -130,11 +131,12 @@ func (us *UserStore) OAuthLogin(ctx context.Context, provider, subject, email, n
 		user.ID = uuid.New()
 		user.Email = email
 		user.Name = name
+		user.EmailVerified = email != ""
 		if createErr := tx.QueryRow(ctx, `
-			INSERT INTO `+us.table("users")+` (id, email, name)
-			VALUES ($1, NULLIF($2, ''), $3)
+			INSERT INTO `+us.table("users")+` (id, email, name, email_verified)
+			VALUES ($1, NULLIF($2, ''), $3, $4)
 			RETURNING created_at, updated_at
-		`, user.ID, user.Email, user.Name).Scan(&user.CreatedAt, &user.UpdatedAt); createErr != nil {
+		`, user.ID, user.Email, user.Name, user.EmailVerified).Scan(&user.CreatedAt, &user.UpdatedAt); createErr != nil {
 			if storehelper.IsUniqueViolation(createErr) {
 				return ErrEmailTaken
 			}
@@ -170,12 +172,12 @@ func (us *UserStore) OAuthLogin(ctx context.Context, provider, subject, email, n
 func (us *UserStore) findOAuthUser(ctx context.Context, provider, subject string) (*User, error) {
 	user := &User{}
 	err := us.db.QueryRow(ctx, `
-		SELECT u.id, COALESCE(u.email, ''), u.name, u.created_at, u.updated_at
+		SELECT u.id, COALESCE(u.email, ''), u.name, u.email_verified, u.created_at, u.updated_at
 		FROM `+us.table("users")+` u
 		JOIN `+us.table("auth_identities")+` a ON a.user_id = u.id
 		WHERE a.provider = $2 AND a.provider_subject = $1
 	`, strings.TrimSpace(subject), provider).Scan(
-		&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt,
+		&user.ID, &user.Email, &user.Name, &user.EmailVerified, &user.CreatedAt, &user.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -288,10 +290,10 @@ func (us *UserStore) RevokeSession(ctx context.Context, token string, sessionID 
 func (us *UserStore) Get(ctx context.Context, id uuid.UUID) (*User, error) {
 	user := &User{}
 	err := us.db.QueryRow(ctx, `
-		SELECT id, COALESCE(email, ''), name, created_at, updated_at
+		SELECT id, COALESCE(email, ''), name, email_verified, created_at, updated_at
 		FROM `+us.table("users")+`
 		WHERE id = $1
-	`, id).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt)
+	`, id).Scan(&user.ID, &user.Email, &user.Name, &user.EmailVerified, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -316,8 +318,8 @@ func (us *UserStore) Add(ctx context.Context, email, name, password string) (*Us
 	user := &User{ID: uuid.New(), Email: email, Name: name}
 	err = withTransaction(ctx, us.db, "user creation", func(tx pgx.Tx) error {
 		if queryErr := tx.QueryRow(ctx, `
-			INSERT INTO `+us.table("users")+` (id, email, name)
-			VALUES ($1, $2, $3)
+			INSERT INTO `+us.table("users")+` (id, email, name, email_verified)
+			VALUES ($1, $2, $3, false)
 			RETURNING created_at, updated_at
 		`, user.ID, user.Email, user.Name).Scan(&user.CreatedAt, &user.UpdatedAt); queryErr != nil {
 			if storehelper.IsUniqueViolation(queryErr) {
@@ -339,48 +341,6 @@ func (us *UserStore) Add(ctx context.Context, email, name, password string) (*Us
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create user transaction: %w", err)
-	}
-	return user, nil
-}
-
-// Update changes a user's email and display name.
-func (us *UserStore) Update(ctx context.Context, id uuid.UUID, email, name string) (*User, error) {
-	email = strings.ToLower(strings.TrimSpace(email))
-	name = strings.TrimSpace(name)
-	if email == "" {
-		return nil, errors.New("email is required")
-	}
-
-	user := &User{}
-	err := withTransaction(ctx, us.db, "user update", func(tx pgx.Tx) error {
-		if queryErr := tx.QueryRow(ctx, `
-			UPDATE `+us.table("users")+` SET email = $2, name = $3, updated_at = now()
-			WHERE id = $1
-			RETURNING id, email, name, created_at, updated_at
-		`, id, email, name).Scan(&user.ID, &user.Email, &user.Name, &user.CreatedAt, &user.UpdatedAt); queryErr != nil {
-			if errors.Is(queryErr, pgx.ErrNoRows) {
-				return ErrUserNotFound
-			}
-			if storehelper.IsUniqueViolation(queryErr) {
-				return ErrEmailTaken
-			}
-			return fmt.Errorf("update user: %w", queryErr)
-		}
-
-		if _, execErr := tx.Exec(ctx, `
-			UPDATE `+us.table("auth_identities")+`
-			SET provider_subject = $2
-			WHERE user_id = $1 AND provider = 'password'
-		`, id, email); execErr != nil {
-			if storehelper.IsUniqueViolation(execErr) {
-				return ErrEmailTaken
-			}
-			return fmt.Errorf("update password identity email: %w", execErr)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("update user transaction: %w", err)
 	}
 	return user, nil
 }

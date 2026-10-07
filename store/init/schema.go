@@ -36,7 +36,7 @@ func initializeSchema(ctx context.Context, db *pgxpool.Pool, schema string) erro
 		return fmt.Errorf("check existing tables: %w", err)
 	}
 	if existingTables == len(requiredTables) {
-		return nil
+		return migrateSchema(ctx, db, schema)
 	}
 	if existingTables != 0 {
 		return fmt.Errorf(
@@ -47,7 +47,16 @@ func initializeSchema(ctx context.Context, db *pgxpool.Pool, schema string) erro
 	if err := createSchema(ctx, db, schema); err != nil {
 		return err
 	}
-	return nil
+	return migrateSchema(ctx, db, schema)
+}
+
+func migrateSchema(ctx context.Context, db *pgxpool.Pool, schema string) error {
+	qualifiedSchema := pgx.Identifier{schema}.Sanitize()
+	queries := []string{
+		`ALTER TABLE webfp.users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT true`,
+	}
+	queries[0] = strings.ReplaceAll(queries[0], "webfp.", qualifiedSchema+".")
+	return execStatements(ctx, db, queries)
 }
 
 func createSchema(ctx context.Context, db *pgxpool.Pool, schema string) error {
@@ -57,6 +66,7 @@ func createSchema(ctx context.Context, db *pgxpool.Pool, schema string) error {
 			id UUID PRIMARY KEY,
 			email TEXT,
 			name TEXT NOT NULL DEFAULT '',
+			email_verified BOOLEAN NOT NULL DEFAULT true,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,

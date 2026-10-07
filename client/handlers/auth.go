@@ -27,21 +27,16 @@ type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-type updateUserRequest struct {
-	Email *string `json:"email"`
-	Name  *string `json:"name"`
-}
-
 const minimumPasswordLength = 8
 
 // Register godoc
 // @Summary      Register an account
-// @Description  Creates an account and returns a 10-minute access token and 24-hour refresh token.
+// @Description  Creates an unverified account and emails a 6-digit code. Confirm it with POST /api/v1/auth/verify-email before sign-in.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
 // @Param        request  body      credentialsRequest  true  "Registration details"
-// @Success      201      {object}  authResponse
+// @Success      201      {object}  verificationResponse
 // @Failure      400      {object}  map[string]string
 // @Failure      409      {object}  map[string]string  "Email already registered"
 // @Failure      500      {object}  map[string]string
@@ -72,26 +67,34 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, r, "register user", err)
 		return
 	}
-	tokens, err := h.store.Users.CreateSession(r.Context(), user.ID)
+	code, err := newVerificationCode()
 	if err != nil {
-		h.internalError(w, r, "create registration session", err)
+		h.internalError(w, r, "generate verification code", err)
 		return
 	}
-	httphelper.JSON(w, http.StatusCreated, authResponse{
-		User: user, Token: tokens.AccessToken, RefreshToken: tokens.RefreshToken,
+	if storeErr := h.store.Users.SetVerificationCode(r.Context(), email, code, verificationCodeTTL); storeErr != nil {
+		h.internalError(w, r, "store verification code", storeErr)
+		return
+	}
+	h.dispatchVerificationEmail(user.Email, user.Name, code)
+	httphelper.JSON(w, http.StatusCreated, verificationResponse{
+		Message:          "verification code sent",
+		Email:            email,
+		ExpiresInMinutes: int(verificationCodeTTL.Minutes()),
 	})
 }
 
 // Login godoc
 // @Summary      Log in
-// @Description  Authenticates and returns a 10-minute access token and 24-hour refresh token.
+// @Description  Authenticates and returns a 10-minute access token and 24-hour refresh token. Password accounts must be verified first.
 // @Tags         auth
 // @Accept       json
 // @Produce      json
 // @Param        request  body      credentialsRequest  true  "Login credentials"
 // @Success      200      {object}  authResponse
 // @Failure      400      {object}  map[string]string
-// @Failure      401      {object}  map[string]string  "Invalid credentials"
+// @Failure      401      {object}  map[string]string             "Invalid credentials"
+// @Failure      403      {object}  verificationRequiredResponse  "Email not verified"
 // @Failure      500      {object}  map[string]string
 // @Router       /api/v1/auth/login [post].
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +110,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.internalError(w, r, "authenticate user", err)
+		return
+	}
+	if !user.EmailVerified {
+		httphelper.JSON(w, http.StatusForbidden, verificationRequiredResponse{
+			Error: "verify your email before signing in",
+			Code:  "email_not_verified",
+		})
 		return
 	}
 	tokens, err := h.store.Users.CreateSession(r.Context(), user.ID)
@@ -173,72 +183,6 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// UpdateUser godoc
-// @Summary   Update the current user
-// @Tags      users
-// @Accept    json
-// @Produce   json
-// @Security  BearerAuth
-// @Param     request  body      updateUserRequest  true  "Fields to update"
-// @Success   200      {object}  store.User
-// @Failure   400      {object}  map[string]string
-// @Failure   401      {object}  map[string]string
-// @Failure   404      {object}  map[string]string
-// @Failure   409      {object}  map[string]string  "Email already registered"
-// @Failure   500      {object}  map[string]string
-// @Router    /api/v1/users/me [patch].
-func (h *Handler) UpdateUser(w http.ResponseWriter, r *http.Request) {
-	userID, ok := authhelper.AuthenticatedUserID(w, r)
-	if !ok {
-		return
-	}
-	var req updateUserRequest
-	if err := h.decodeJSON(w, r, &req); err != nil {
-		httphelper.Error(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if req.Email == nil && req.Name == nil {
-		httphelper.Error(w, http.StatusBadRequest, "provide email or name to update")
-		return
-	}
-
-	current, err := h.store.Users.Get(r.Context(), userID)
-	if err != nil {
-		if errors.Is(err, store.ErrUserNotFound) {
-			httphelper.Error(w, http.StatusNotFound, "user not found")
-			return
-		}
-		h.internalError(w, r, "load user for update", err)
-		return
-	}
-	email, name := current.Email, current.Name
-	if req.Email != nil {
-		email = strings.TrimSpace(*req.Email)
-		address, parseErr := mail.ParseAddress(email)
-		if parseErr != nil || address.Address != email {
-			httphelper.Error(w, http.StatusBadRequest, "valid email is required")
-			return
-		}
-	}
-	if req.Name != nil {
-		name = *req.Name
-	}
-	user, err := h.store.Users.Update(r.Context(), userID, email, name)
-	if err != nil {
-		if errors.Is(err, store.ErrEmailTaken) {
-			httphelper.Error(w, http.StatusConflict, "email is already registered")
-			return
-		}
-		if errors.Is(err, store.ErrUserNotFound) {
-			httphelper.Error(w, http.StatusNotFound, "user not found")
-			return
-		}
-		h.internalError(w, r, "update user", err)
-		return
-	}
-	httphelper.JSON(w, http.StatusOK, user)
 }
 
 // GetUser godoc

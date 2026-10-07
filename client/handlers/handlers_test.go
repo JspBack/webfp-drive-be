@@ -16,7 +16,7 @@ import (
 )
 
 func testHandler() *handlers.Handler {
-	return handlers.New(nil, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1024, 1024, "", false, nil, nil)
+	return handlers.New(nil, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), 1024, 1024, "", false, nil, nil, nil)
 }
 
 func authenticatedRequest(method, target, body string) *http.Request {
@@ -53,8 +53,20 @@ func TestAuthHandlersRejectInvalidRequests(t *testing.T) {
 	assertStatus(t, h.Login, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"unexpected":true}`)), http.StatusBadRequest)
 	assertStatus(t, h.Refresh, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"refresh_token":" "}`)), http.StatusBadRequest)
 	assertStatus(t, h.GetUser, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusUnauthorized)
-	assertStatus(t, h.UpdateUser, authenticatedRequest(http.MethodPatch, "/", `{}`), http.StatusBadRequest)
-	assertStatus(t, h.UpdateUser, authenticatedRequest(http.MethodPatch, "/", `{"unexpected":true}`), http.StatusBadRequest)
+	assertStatus(t, h.VerifyEmail, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`)), http.StatusBadRequest)
+	assertStatus(t, h.VerifyEmail,
+		httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"email":"bad","code":"123456"}`)),
+		http.StatusBadRequest,
+	)
+	assertStatus(t, h.VerifyEmail,
+		httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"email":"user@example.com","code":"12"}`)),
+		http.StatusBadRequest,
+	)
+	assertStatus(t, h.ResendVerification,
+		httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"email":"bad"}`)),
+		http.StatusBadRequest,
+	)
+	assertStatus(t, h.ResendVerification, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`)), http.StatusBadRequest)
 }
 
 func TestFileHandlersRejectInvalidRequests(t *testing.T) {
@@ -63,7 +75,6 @@ func TestFileHandlersRejectInvalidRequests(t *testing.T) {
 
 	request := authenticatedRequest(http.MethodGet, "/?folder_id=invalid", "")
 	assertStatus(t, h.ListFiles, request, http.StatusBadRequest)
-	assertStatus(t, h.GetFile, withPathID(authenticatedRequest(http.MethodGet, "/", ""), "invalid"), http.StatusBadRequest)
 	assertStatus(t, h.DownloadFile, withPathID(authenticatedRequest(http.MethodGet, "/", ""), "invalid"), http.StatusBadRequest)
 	assertStatus(t, h.DeleteFile, withPathID(authenticatedRequest(http.MethodDelete, "/", ""), "invalid"), http.StatusBadRequest)
 
@@ -184,6 +195,7 @@ func configuredGitHubHandler() *handlers.Handler {
 			"http://localhost:5173/auth/callback",
 		),
 		nil,
+		nil,
 	)
 }
 
@@ -198,6 +210,7 @@ func configuredGoogleHandler() *handlers.Handler {
 			"http://localhost:8080/api/v1/callback",
 			"http://localhost:5173/auth/callback",
 		),
+		nil,
 	)
 }
 
