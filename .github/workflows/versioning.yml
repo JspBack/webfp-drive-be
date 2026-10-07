@@ -106,6 +106,7 @@ jobs:
         with:
           context: .
           push: true
+          provenance: false
           build-args: |
             VERSION=${{ needs.tag.outputs.version }}
           tags: |
@@ -145,7 +146,9 @@ jobs:
 
       - name: Keep last 3 images
         run: |
-          gcloud artifacts docker images list "$IMAGE" --format='json(version,createTime)' \
-            | jq -r 'sort_by(.createTime) | reverse | .[3:] | .[].version' \
-            | sed "s|^|$IMAGE@|" \
-            | xargs -r gcloud artifacts docker images delete --quiet --delete-tags
+          gcloud artifacts docker images list "$IMAGE" --include-tags --format='json(version,createTime,tags)' > /tmp/images.json
+          jq -r '[.[] | select((.tags // []) | length > 0)] | sort_by(.createTime) | reverse | .[3:] | .[].version' /tmp/images.json > /tmp/old-images.txt
+          CUTOFF=$(jq -r '[.[] | select((.tags // []) | length > 0)] | sort_by(.createTime) | reverse | .[2].createTime // ""' /tmp/images.json)
+          jq -r --arg cutoff "$CUTOFF" 'select($cutoff != "") | .[] | select(((.tags // []) | length) == 0 and .createTime <= $cutoff) | .version' /tmp/images.json > /tmp/orphans.txt
+          sed "s|^|$IMAGE@|" /tmp/old-images.txt | xargs -r -I{} gcloud artifacts docker images delete --delete-tags --quiet {}
+          sed "s|^|$IMAGE@|" /tmp/orphans.txt | xargs -r -I{} gcloud artifacts docker images delete --quiet {} || true
