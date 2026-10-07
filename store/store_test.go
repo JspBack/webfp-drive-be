@@ -34,6 +34,9 @@ func TestStoreInputValidation(t *testing.T) {
 	if err := (&store.UserStore{}).SetVerificationCode(ctx, "user@example.com", "123456", 0); err == nil {
 		t.Fatal("SetVerificationCode() accepted zero ttl")
 	}
+	if _, err := (&store.UserStore{}).DeleteStaleUnverifiedUsers(ctx, 0); err == nil {
+		t.Fatal("DeleteStaleUnverifiedUsers() accepted nonpositive retention")
+	}
 }
 
 func TestShareOptionValidation(t *testing.T) {

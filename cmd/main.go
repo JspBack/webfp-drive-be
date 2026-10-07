@@ -34,6 +34,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	go cl.StartUnverifiedUserCleanup(ctx)
+
 	go func() {
 		<-ctx.Done()
 		l.Info("shutting down...")

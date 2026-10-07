@@ -25,8 +25,6 @@ var (
 	ErrVerificationExhausted = errors.New("too many verification attempts")
 )
 
-// verification keys hold the pending code for one address; the attempts key
-// dies with the code, the cooldown key throttles resends.
 func verificationCodeKey(email string) string {
 	return "webfp:email_verify:code:" + email
 }
@@ -48,8 +46,6 @@ func hashVerificationCode(code string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// SetVerificationCode stores a hashed code for email, replacing any previous
-// code and resetting the failed-attempt counter.
 func (us *UserStore) SetVerificationCode(ctx context.Context, email, code string, ttl time.Duration) error {
 	email = normalizeVerificationEmail(email)
 	if email == "" || code == "" || ttl <= 0 {
@@ -64,9 +60,6 @@ func (us *UserStore) SetVerificationCode(ctx context.Context, email, code string
 	return nil
 }
 
-// ConsumeVerificationCode checks code against the pending code for email. A
-// correct code clears both keys; a wrong one counts an attempt and deletes the
-// code once the attempt budget is spent.
 func (us *UserStore) ConsumeVerificationCode(ctx context.Context, email, code string) error {
 	email = normalizeVerificationEmail(email)
 	if email == "" || code == "" {
@@ -97,8 +90,6 @@ func (us *UserStore) ConsumeVerificationCode(ctx context.Context, email, code st
 	return nil
 }
 
-// TryVerificationCooldown reports whether a new code may be sent for email
-// right now; the first call inside window claims it.
 func (us *UserStore) TryVerificationCooldown(ctx context.Context, email string, window time.Duration) (bool, error) {
 	email = normalizeVerificationEmail(email)
 	if email == "" || window <= 0 {
@@ -111,7 +102,6 @@ func (us *UserStore) TryVerificationCooldown(ctx context.Context, email string, 
 	return allowed, nil
 }
 
-// GetByEmail returns the user owning the address, or ErrUserNotFound.
 func (us *UserStore) GetByEmail(ctx context.Context, email string) (*User, error) {
 	email = normalizeVerificationEmail(email)
 	if email == "" {
@@ -132,7 +122,6 @@ func (us *UserStore) GetByEmail(ctx context.Context, email string) (*User, error
 	return user, nil
 }
 
-// MarkVerified flags the address as verified and returns the updated user.
 func (us *UserStore) MarkVerified(ctx context.Context, email string) (*User, error) {
 	email = normalizeVerificationEmail(email)
 	if email == "" {
@@ -152,4 +141,19 @@ func (us *UserStore) MarkVerified(ctx context.Context, email string) (*User, err
 		return nil, fmt.Errorf("mark email verified: %w", err)
 	}
 	return user, nil
+}
+
+func (us *UserStore) DeleteStaleUnverifiedUsers(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 {
+		return 0, errors.New("retention window is required")
+	}
+	tag, err := us.db.Exec(ctx, `
+		DELETE FROM `+us.table("users")+`
+		WHERE email_verified = false
+			AND created_at < now() - make_interval(secs => $1)
+	`, olderThan.Seconds())
+	if err != nil {
+		return 0, fmt.Errorf("delete stale unverified users: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
