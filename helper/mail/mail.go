@@ -1,6 +1,3 @@
-// Package mail delivers account emails through an SMTP relay (Gmail by
-// default). A client built without credentials reports ErrNotConfigured so
-// callers can fall back to logging instead of failing registration.
 package mail
 
 import (
@@ -24,10 +21,8 @@ import (
 //go:embed verify_email.html
 var verificationHTML string
 
-// ErrNotConfigured reports that no SMTP credentials are available for sending.
 var ErrNotConfigured = errors.New("mail delivery is not configured")
 
-// VerificationRequest describes one verification-code email.
 type VerificationRequest struct {
 	ToEmail string
 	ToName  string
@@ -36,7 +31,6 @@ type VerificationRequest struct {
 	SiteURL string
 }
 
-// Client sends email over SMTP; the zero value is disabled.
 type Client struct {
 	host     string
 	port     string
@@ -47,9 +41,6 @@ type Client struct {
 	enabled  bool
 }
 
-// New builds an SMTP client. Empty credentials yield a disabled client with no
-// error so local development can run without a mail server. Host and port
-// default to Gmail's STARTTLS endpoint.
 func New(host, port, user, password, fromEmail, fromName string) (*Client, error) {
 	if user == "" || password == "" {
 		return &Client{}, nil
@@ -80,12 +71,10 @@ func New(host, port, user, password, fromEmail, fromName string) (*Client, error
 	}, nil
 }
 
-// Enabled reports whether sending is configured.
 func (c *Client) Enabled() bool {
 	return c != nil && c.enabled
 }
 
-// SendVerification emails the six-digit code using the embedded template.
 func (c *Client) SendVerification(ctx context.Context, req VerificationRequest) error {
 	if !c.Enabled() {
 		return ErrNotConfigured
@@ -105,8 +94,6 @@ func (c *Client) SendVerification(ctx context.Context, req VerificationRequest) 
 	return nil
 }
 
-// send speaks enough SMTP for Gmail's STARTTLS endpoint: EHLO, STARTTLS,
-// AUTH PLAIN, MAIL/RCPT/DATA, honoring any deadline on ctx.
 func (c *Client) send(ctx context.Context, to string, msg []byte) error {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(c.host, c.port))
@@ -154,7 +141,6 @@ func (c *Client) send(ctx context.Context, to string, msg []byte) error {
 	return nil
 }
 
-// buildMessage assembles a multipart/alternative MIME message.
 func buildMessage(fromEmail, fromName, to, subject, textBody, htmlBody string) ([]byte, error) {
 	var head bytes.Buffer
 	fmt.Fprintf(&head, "From: %s\r\n", (&mail.Address{Name: fromName, Address: fromEmail}).String())
