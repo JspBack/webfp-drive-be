@@ -3,18 +3,17 @@ package client
 import (
 	"context"
 	"time"
+
+	"github.com/JspBack/webfp-drive/store"
 )
 
-const (
-	unverifiedRetention  = 24 * time.Hour
-	unverifiedSweepEvery = 24 * time.Hour
-)
+const unverifiedSweepEvery = 24 * time.Hour
 
 func (c *Client) StartUnverifiedUserCleanup(ctx context.Context) {
 	ticker := time.NewTicker(unverifiedSweepEvery)
 	defer ticker.Stop()
 	for {
-		removed, err := c.Store.Users.DeleteStaleUnverifiedUsers(ctx, unverifiedRetention)
+		removed, err := c.Store.Users.DeleteStaleUnverifiedUsers(ctx, store.UnverifiedRetention)
 		switch {
 		case err != nil && ctx.Err() == nil:
 			c.log.ErrorContext(ctx, "remove unverified users", "error", err)

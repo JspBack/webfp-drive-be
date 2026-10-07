@@ -17,6 +17,7 @@ import (
 const (
 	verificationMaxAttempts = 5
 	verificationAttemptsTTL = 15 * time.Minute
+	UnverifiedRetention     = 24 * time.Hour
 )
 
 var (

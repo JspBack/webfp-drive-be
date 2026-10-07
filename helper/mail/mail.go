@@ -24,11 +24,12 @@ var verificationHTML string
 var ErrNotConfigured = errors.New("mail delivery is not configured")
 
 type VerificationRequest struct {
-	ToEmail string
-	ToName  string
-	Code    string
-	TTL     time.Duration
-	SiteURL string
+	ToEmail   string
+	ToName    string
+	Code      string
+	TTL       time.Duration
+	Retention time.Duration
+	SiteURL   string
 }
 
 type Client struct {
@@ -188,23 +189,31 @@ func buildMessage(fromEmail, fromName, to, subject, textBody, htmlBody string) (
 }
 
 type verificationTemplateData struct {
-	Name          string
-	Code          string
-	ExpiryMinutes int
-	SiteURL       string
+	Name           string
+	Code           string
+	ExpiryMinutes  int
+	RetentionHours int
+	SiteURL        string
 }
+
+const defaultVerificationRetention = 24 * time.Hour
 
 func renderVerificationHTML(req VerificationRequest) (string, error) {
 	tmpl, err := template.New("verification").Parse(verificationHTML)
 	if err != nil {
 		return "", fmt.Errorf("parse verification template: %w", err)
 	}
+	retention := req.Retention
+	if retention <= 0 {
+		retention = defaultVerificationRetention
+	}
 	var buf bytes.Buffer
 	if execErr := tmpl.Execute(&buf, verificationTemplateData{
-		Name:          req.ToName,
-		Code:          req.Code,
-		ExpiryMinutes: int(req.TTL.Minutes()),
-		SiteURL:       req.SiteURL,
+		Name:           req.ToName,
+		Code:           req.Code,
+		ExpiryMinutes:  int(req.TTL.Minutes()),
+		RetentionHours: int(retention.Hours()),
+		SiteURL:        req.SiteURL,
 	}); execErr != nil {
 		return "", fmt.Errorf("render verification template: %w", execErr)
 	}
@@ -216,13 +225,18 @@ func verificationText(req VerificationRequest) string {
 	if name == "" {
 		name = "there"
 	}
+	retention := req.Retention
+	if retention <= 0 {
+		retention = defaultVerificationRetention
+	}
 	return fmt.Sprintf(
 		"WebFP Drive - email verification\n\n"+
 			"Hi %s,\n\n"+
 			"Use this code to verify your email address:\n\n"+
 			"    %s\n\n"+
-			"The code expires in %d minutes. If you did not create a WebFP Drive\n"+
-			"account, you can safely ignore this email.\n\n%s\n",
-		name, req.Code, int(req.TTL.Minutes()), req.SiteURL,
+			"The code expires in %d minutes. You have %d hours to verify this\n"+
+			"address; after that the account is removed. If you did not create a\n"+
+			"WebFP Drive account, you can safely ignore this email.\n\n%s\n",
+		name, req.Code, int(req.TTL.Minutes()), int(retention.Hours()), req.SiteURL,
 	)
 }

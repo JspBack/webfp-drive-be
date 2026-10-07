@@ -178,11 +178,12 @@ func (h *Handler) dispatchVerificationEmail(email, name, code string) {
 		err := mailhelper.ErrNotConfigured
 		if h.mail != nil {
 			err = h.mail.SendVerification(ctx, mailhelper.VerificationRequest{
-				ToEmail: email,
-				ToName:  name,
-				Code:    code,
-				TTL:     verificationCodeTTL,
-				SiteURL: h.publicScheme + "://" + h.publicHost,
+				ToEmail:   email,
+				ToName:    name,
+				Code:      code,
+				TTL:       verificationCodeTTL,
+				Retention: store.UnverifiedRetention,
+				SiteURL:   h.publicScheme + "://" + h.publicHost,
 			})
 		}
 		switch {

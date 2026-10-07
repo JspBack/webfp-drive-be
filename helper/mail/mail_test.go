@@ -48,23 +48,28 @@ func TestNewRejectsInvalidFromAddress(t *testing.T) {
 
 func TestVerificationTemplateContents(t *testing.T) {
 	req := VerificationRequest{
-		ToEmail: "user@example.com",
-		ToName:  "Ayse",
-		Code:    "042517",
-		TTL:     15 * time.Minute,
-		SiteURL: "https://webfp.dpdns.org",
+		ToEmail:   "user@example.com",
+		ToName:    "Ayse",
+		Code:      "042517",
+		TTL:       15 * time.Minute,
+		Retention: 24 * time.Hour,
+		SiteURL:   "https://webfp.dpdns.org",
 	}
 	html, err := renderVerificationHTML(req)
 	if err != nil {
 		t.Fatalf("renderVerificationHTML(): %v", err)
 	}
-	for _, want := range []string{"042517", "Ayse", "15 minutes", "https://webfp.dpdns.org"} {
+	for _, want := range []string{"042517", "Ayse", "15 minutes", "24 hours", "permanently deleted", "https://webfp.dpdns.org"} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered template missing %q", want)
 		}
 	}
-	if !strings.Contains(verificationText(req), "042517") {
+	text := verificationText(req)
+	if !strings.Contains(text, "042517") {
 		t.Error("plain-text fallback missing the code")
+	}
+	if !strings.Contains(text, "24 hours") {
+		t.Error("plain-text fallback missing the retention window")
 	}
 }
 
