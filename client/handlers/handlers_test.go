@@ -43,6 +43,10 @@ func TestHealth(t *testing.T) {
 	assertStatus(t, testHandler().Health, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusOK)
 }
 
+func TestReadyWithoutStore(t *testing.T) {
+	assertStatus(t, testHandler().Ready, httptest.NewRequest(http.MethodGet, "/api/ready", nil), http.StatusServiceUnavailable)
+}
+
 func TestAuthHandlersRejectInvalidRequests(t *testing.T) {
 	h := testHandler()
 	assertStatus(t, h.Register, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{`)), http.StatusBadRequest)

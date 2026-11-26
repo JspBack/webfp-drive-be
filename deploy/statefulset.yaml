@@ -51,10 +51,10 @@ spec:
               readOnly: true
           readinessProbe:
             httpGet:
-              path: /api/health
+              path: /api/ready
               port: http
             initialDelaySeconds: 3
-            periodSeconds: 10
+            periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
           livenessProbe:

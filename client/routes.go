@@ -29,6 +29,7 @@ func (c *Client) registerRoutes(mux *http.ServeMux) {
 		}),
 	))
 	mux.HandleFunc("GET /api/health", h.Health)
+	mux.HandleFunc("GET /api/ready", h.Ready)
 	mux.HandleFunc("POST /api/v1/auth/register", h.Register)
 	mux.HandleFunc("POST /api/v1/auth/login", h.Login)
 	mux.HandleFunc("POST /api/v1/auth/verify-email", h.VerifyEmail)
