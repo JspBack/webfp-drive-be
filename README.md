@@ -18,7 +18,7 @@ CREATE SCHEMA IF NOT EXISTS webfp;
 go run ./cmd
 ```
 
-API: http://localhost:8080  
+API: http://localhost:8080
 Swagger: http://localhost:8080/swagger/index.html
 
 ## Test
