@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	authhelper "github.com/JspBack/webfp-drive/helper/auth"
@@ -15,9 +17,10 @@ import (
 )
 
 const (
-	githubStateCookie = "webfp_github_state"
-	googleStateCookie = "webfp_google_state"
-	oauthStateTTL     = 10 * time.Minute
+	githubStateCookie     = "webfp_github_state"
+	googleStateCookie     = "webfp_google_state"
+	oauthStateTTL         = 10 * time.Minute
+	browserNonceHexLength = 64
 )
 
 // oauthFlow bundles everything needed to start and finish one provider's
@@ -122,14 +125,12 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	h.GitHubCallback(w, r)
 }
 
-// GitHubCallback finishes the GitHub OAuth flow and redirects the browser to
-// the frontend with the issued access and refresh tokens in the URL fragment.
+// GitHubCallback finishes the GitHub OAuth flow and redirects to the frontend.
 func (h *Handler) GitHubCallback(w http.ResponseWriter, r *http.Request) {
 	h.completeOAuth(w, r, h.githubFlow())
 }
 
-// GoogleCallback finishes the Google OAuth flow and redirects the browser to
-// the frontend with the issued access and refresh tokens in the URL fragment.
+// GoogleCallback finishes the Google OAuth flow and redirects to the frontend.
 func (h *Handler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	h.completeOAuth(w, r, h.googleFlow())
 }
@@ -143,6 +144,17 @@ func (h *Handler) startOAuth(w http.ResponseWriter, r *http.Request, flow *oauth
 	if err != nil {
 		h.internalError(w, r, "create "+flow.name+" OAuth state", err)
 		return
+	}
+	if nonce := r.URL.Query().Get("browser_nonce"); nonce != "" {
+		if len(nonce) != browserNonceHexLength {
+			httphelper.Error(w, http.StatusBadRequest, "invalid browser nonce")
+			return
+		}
+		if _, decodeErr := hex.DecodeString(nonce); decodeErr != nil {
+			httphelper.Error(w, http.StatusBadRequest, "invalid browser nonce")
+			return
+		}
+		state += "." + nonce
 	}
 	h.setOAuthCookie(w, flow.cookieName, state, int(oauthStateTTL.Seconds()))
 	http.Redirect(w, r, flow.authorize(state), http.StatusTemporaryRedirect)
@@ -215,10 +227,14 @@ func (h *Handler) finishOAuthLogin(
 			flow.name+" sign-in could not be completed", flow.returnURL)
 		return
 	}
-	http.Redirect(w, r, oauthRedirectTarget(flow.returnURL, url.Values{
+	params := url.Values{
 		"token":         {tokens.AccessToken},
 		"refresh_token": {tokens.RefreshToken},
-	}), http.StatusFound)
+	}
+	if _, nonce, ok := strings.Cut(r.FormValue("state"), "."); ok {
+		params.Set("browser_nonce", nonce)
+	}
+	http.Redirect(w, r, oauthRedirectTarget(flow.returnURL, params), http.StatusFound)
 }
 
 func (h *Handler) validOAuthState(r *http.Request, cookieName string) bool {
