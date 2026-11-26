@@ -72,10 +72,7 @@ type createShareResponse struct {
 // @Param        request  body      createShareRequest  true  "Share options"
 // @Success      201      {object}  createShareResponse
 // @Failure      400      {object}  map[string]string
-// @Failure      401      {object}  map[string]string
 // @Failure      404      {object}  map[string]string  "File not found"
-// @Failure      409      {object}  map[string]string  "File is not ready"
-// @Failure      500      {object}  map[string]string
 // @Router       /api/v1/files/{id}/shares [post].
 func (h *Handler) CreateShare(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
@@ -149,9 +146,7 @@ type shareListItemResponse struct {
 // @Tags         shares
 // @Produce      json
 // @Security     BearerAuth
-// @Success      200  {array}   shareListItemResponse
-// @Failure      401  {object}  map[string]string
-// @Failure      500  {object}  map[string]string
+// @Success      200  {array}  shareListItemResponse
 // @Router       /api/v1/shares [get].
 func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
@@ -195,12 +190,9 @@ func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
 // @Summary   Revoke a share link
 // @Tags      shares
 // @Security  BearerAuth
-// @Param     id   path  string  true  "Share UUID"
-// @Success   204  "Share revoked"
+// @Param     id   path      string  true  "Share UUID"
 // @Failure   400  {object}  map[string]string
-// @Failure   401  {object}  map[string]string
 // @Failure   404  {object}  map[string]string
-// @Failure   500  {object}  map[string]string
 // @Router    /api/v1/shares/{id} [delete].
 func (h *Handler) RevokeShare(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)

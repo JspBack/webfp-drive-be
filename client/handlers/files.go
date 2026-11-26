@@ -56,10 +56,7 @@ func (req *updateFileRequest) UnmarshalJSON(data []byte) error {
 // @Param        folder_id  formData  string  false  "Destination folder UUID"
 // @Success      201        {object}  store.File
 // @Failure      400        {object}  map[string]string
-// @Failure      401        {object}  map[string]string
 // @Failure      404        {object}  map[string]string  "Folder not found"
-// @Failure      413        {object}  map[string]string  "File exceeds configured limit or storage quota"
-// @Failure      500        {object}  map[string]string
 // @Router       /api/v1/files [post].
 func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
@@ -130,8 +127,6 @@ func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 // @Param        folder_id  query     string  false  "Folder UUID"
 // @Success      200        {array}   store.File
 // @Failure      400        {object}  map[string]string
-// @Failure      401        {object}  map[string]string
-// @Failure      500        {object}  map[string]string
 // @Router       /api/v1/files [get].
 func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
@@ -161,9 +156,7 @@ func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 // @Param        request  body      updateFileRequest  true  "File name and/or destination folder"
 // @Success      200      {object}  store.File
 // @Failure      400      {object}  map[string]string
-// @Failure      401      {object}  map[string]string
 // @Failure      404      {object}  map[string]string
-// @Failure      500      {object}  map[string]string
 // @Router       /api/v1/files/{id} [patch].
 func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
@@ -217,12 +210,9 @@ func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
 // @Description  Deletes the stored object and its metadata.
 // @Tags         files
 // @Security     BearerAuth
-// @Param        id   path  string  true  "File UUID"
-// @Success      204  "File deleted"
+// @Param        id   path      string  true  "File UUID"
 // @Failure      400  {object}  map[string]string
-// @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
-// @Failure      500  {object}  map[string]string
 // @Router       /api/v1/files/{id} [delete].
 func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)

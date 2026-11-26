@@ -21,9 +21,7 @@ import (
 // @Produce      octet-stream
 // @Success      200  {file}    file  "File contents"
 // @Failure      400  {object}  map[string]string
-// @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
-// @Failure      500  {object}  map[string]string
 // @Router       /api/v1/files/{id}/download [get].
 func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)

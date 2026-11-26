@@ -96,8 +96,7 @@ func (h *Handler) googleFlow() *oauthFlow {
 // @Description  Stores a CSRF state cookie and redirects to GitHub, which calls back /api/v1/callback.
 // @Tags         auth
 // @Produce      json
-// @Success      307  {object}  map[string]string
-// @Failure      503  {object}  map[string]string  "GitHub sign-in is not configured"
+// @Failure      400  {object}  map[string]string  "Invalid browser nonce"
 // @Router       /api/v1/auth/github [get].
 func (h *Handler) LoginGitHub(w http.ResponseWriter, r *http.Request) {
 	h.startOAuth(w, r, h.githubFlow())
@@ -108,8 +107,7 @@ func (h *Handler) LoginGitHub(w http.ResponseWriter, r *http.Request) {
 // @Description  Stores a CSRF state cookie and redirects to Google, which calls back /api/v1/callback.
 // @Tags         auth
 // @Produce      json
-// @Success      307  {object}  map[string]string
-// @Failure      503  {object}  map[string]string  "Google sign-in is not configured"
+// @Failure      400  {object}  map[string]string  "Invalid browser nonce"
 // @Router       /api/v1/auth/google [get].
 func (h *Handler) LoginGoogle(w http.ResponseWriter, r *http.Request) {
 	h.startOAuth(w, r, h.googleFlow())

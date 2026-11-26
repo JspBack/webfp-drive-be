@@ -61,8 +61,6 @@ func newVerificationCode() (string, error) {
 // @Success      200      {object}  authResponse
 // @Failure      400      {object}  map[string]string
 // @Failure      404      {object}  map[string]string
-// @Failure      429      {object}  map[string]string
-// @Failure      500      {object}  map[string]string
 // @Router       /api/v1/auth/verify-email [post].
 func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	var req verifyEmailRequest
@@ -118,10 +116,7 @@ func (h *Handler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 // @Accept       json
 // @Produce      json
 // @Param        request  body      resendVerificationRequest  true  "Email address"
-// @Success      202      {object}  map[string]string
 // @Failure      400      {object}  map[string]string
-// @Failure      429      {object}  map[string]string
-// @Failure      500      {object}  map[string]string
 // @Router       /api/v1/auth/resend-verification [post].
 func (h *Handler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 	var req resendVerificationRequest
