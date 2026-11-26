@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/go/bin
-          key: ci-tools-${{ runner.os }}-swag-v1.8.1-goimports-v0.51.0-golangci-lint-v2.12.2
+          key: ci-tools-${{ runner.os }}-swag-v1.8.1-goimports-v0.51.0-golangci-lint-v2.14.0
 
       - name: Install CI tools
         run: |
@@ -44,7 +44,7 @@ jobs:
           export PATH="$GOBIN:$PATH"
           command -v swag >/dev/null 2>&1 || go install github.com/swaggo/swag/cmd/swag@v1.8.1
           command -v goimports >/dev/null 2>&1 || go install golang.org/x/tools/cmd/goimports@v0.51.0
-          command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+          command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
 
       - name: generate swagger docs
         run: |
