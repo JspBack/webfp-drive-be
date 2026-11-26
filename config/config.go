@@ -5,10 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/mail"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -175,121 +173,6 @@ func loadApplicationConfig(c *Config) error {
 	}
 	return nil
 }
-
-func loadDatabaseConfig(c *Config) error {
-	var err error
-	if c.ConnStr, err = envString("CONN_STR"); err != nil {
-		return err
-	}
-	c.DBReadReplicaConnStr = strings.TrimSpace(os.Getenv("DB_READ_REPLICA_CONN_STR"))
-	if c.DBSchema, err = envString("DB_SCHEMA"); err != nil {
-		return err
-	}
-	c.DBSchema = strings.TrimSpace(c.DBSchema)
-	if c.DBSchema == "" {
-		return errors.New("DB_SCHEMA must not be empty")
-	}
-	if c.DBMaxConns, err = envInt32("DB_MAX_CONNS"); err != nil {
-		return err
-	}
-	if c.DBMinConns, err = envInt32("DB_MIN_CONNS"); err != nil {
-		return err
-	}
-	if c.DBMaxConnIdleTime, err = envDuration("DB_MAX_CONN_IDLE_TIME"); err != nil {
-		return err
-	}
-	if c.DBMaxConnLifetime, err = envDuration("DB_MAX_CONN_LIFETIME"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func loadRedisConfig(c *Config) error {
-	var err error
-	if c.RedisURL, err = envString("REDIS_URL"); err != nil {
-		return err
-	}
-	if c.RedisPoolSize, err = envInt("REDIS_POOL_SIZE"); err != nil {
-		return err
-	}
-	if c.RedisMinIdleConns, err = envInt("REDIS_MIN_IDLE_CONNS"); err != nil {
-		return err
-	}
-	if c.RedisPoolTimeout, err = envDuration("REDIS_POOL_TIMEOUT"); err != nil {
-		return err
-	}
-	if c.RedisConnMaxIdleTime, err = envDuration("REDIS_CONN_MAX_IDLE_TIME"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func loadR2Config(c *Config) error {
-	var err error
-	if c.R2AccountID, err = envString("R2_ACCOUNT_ID"); err != nil {
-		return err
-	}
-	if c.R2BucketName, err = envString("R2_BUCKET_NAME"); err != nil {
-		return err
-	}
-	if c.R2AccessKeyID, err = envString("R2_ACCESS_KEY_ID"); err != nil {
-		return err
-	}
-	if c.R2SecretAccessKey, err = envString("R2_SECRET_ACCESS_KEY"); err != nil {
-		return err
-	}
-	return nil
-}
-
-func loadAuthConfig(c *Config) error {
-	c.GitHubClientID = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_ID"))
-	c.GitHubClientSecret = strings.TrimSpace(os.Getenv("GITHUB_CLIENT_SECRET"))
-	c.GoogleClientID = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_ID"))
-	c.GoogleClientSecret = strings.TrimSpace(os.Getenv("GOOGLE_CLIENT_SECRET"))
-	c.OAuthReturnURL = strings.TrimSpace(os.Getenv("OAUTH_RETURN_URL"))
-	if c.GitHubClientID != "" && c.GitHubClientSecret == "" {
-		return errors.New("GITHUB_CLIENT_SECRET is required when GITHUB_CLIENT_ID is set")
-	}
-	if c.GoogleClientID != "" && c.GoogleClientSecret == "" {
-		return errors.New("GOOGLE_CLIENT_SECRET is required when GOOGLE_CLIENT_ID is set")
-	}
-	if c.GitHubClientID == "" && c.GoogleClientID == "" {
-		return nil
-	}
-	if err := validateAbsoluteURL(c.OAuthReturnURL); err != nil {
-		return fmt.Errorf("OAUTH_RETURN_URL: %w", err)
-	}
-	return nil
-}
-
-func loadSMTPConfig(c *Config) error {
-	c.SMTPHost = strings.TrimSpace(os.Getenv("SMTP_HOST"))
-	c.SMTPPort = strings.TrimSpace(os.Getenv("SMTP_PORT"))
-	c.SMTPUser = strings.TrimSpace(os.Getenv("SMTP_USER"))
-	c.SMTPPassword = strings.TrimSpace(os.Getenv("SMTP_PASSWORD"))
-	c.SMTPFromEmail = strings.TrimSpace(os.Getenv("SMTP_FROM_EMAIL"))
-	c.SMTPFromName = strings.TrimSpace(os.Getenv("SMTP_FROM_NAME"))
-	if c.SMTPUser == "" && c.SMTPPassword == "" {
-		return nil
-	}
-	if c.SMTPUser == "" {
-		return errors.New("SMTP_USER is required when SMTP_PASSWORD is set")
-	}
-	if c.SMTPPassword == "" {
-		return errors.New("SMTP_PASSWORD is required when SMTP_USER is set")
-	}
-	if c.SMTPFromEmail == "" {
-		c.SMTPFromEmail = c.SMTPUser
-	}
-	if _, err := mail.ParseAddress(c.SMTPFromEmail); err != nil {
-		return fmt.Errorf("SMTP_FROM_EMAIL: %w", err)
-	}
-	if c.SMTPFromName == "" {
-		c.SMTPFromName = "WebFP Drive"
-	}
-	return nil
-}
-
 func validateAbsoluteURL(value string) error {
 	if value == "" {
 		return errors.New("must be set")
@@ -319,90 +202,6 @@ func validateConfig(c *Config) error {
 	}
 	return nil
 }
-
-func envString(key string) (string, error) {
-	value, ok := os.LookupEnv(key)
-	if !ok {
-		return "", fmt.Errorf("required environment variable %s is not set", key)
-	}
-	return value, nil
-}
-
-func envInt(key string) (int, error) {
-	value, err := envString(key)
-	if err != nil {
-		return 0, err
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func envInt32(key string) (int32, error) {
-	value, err := envString(key)
-	if err != nil {
-		return 0, err
-	}
-	parsed, err := strconv.ParseInt(value, 10, 32)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, err)
-	}
-	return int32(parsed), nil
-}
-
-func envInt64(key string) (int64, error) {
-	value, err := envString(key)
-	if err != nil {
-		return 0, err
-	}
-	parsed, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func envInt64Default(key string, fallback int64) (int64, error) {
-	value, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, err)
-	}
-	if parsed <= 0 {
-		return 0, fmt.Errorf("%s must be positive", key)
-	}
-	return parsed, nil
-}
-
-func envDuration(key string) (time.Duration, error) {
-	value, err := envString(key)
-	if err != nil {
-		return 0, err
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, err)
-	}
-	return parsed, nil
-}
-
-func envLogLevel(key string) (slog.Level, error) {
-	value, err := envString(key)
-	if err != nil {
-		return 0, err
-	}
-	var level slog.Level
-	if parseErr := level.UnmarshalText([]byte(value)); parseErr != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, parseErr)
-	}
-	return level, nil
-}
-
 func validatePublicHost(host string) error {
 	parsed, err := url.Parse("//" + host)
 	if err != nil || parsed.Hostname() == "" || parsed.Host != host ||
@@ -410,19 +209,4 @@ func validatePublicHost(host string) error {
 		return errors.New("PUBLIC_HOST must be a hostname, optionally with a port, without a scheme or path")
 	}
 	return nil
-}
-
-func envFloat64Default(key string, fallback float64) (float64, error) {
-	value, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s: %w", key, err)
-	}
-	if parsed < 0 || parsed > 1 {
-		return 0, fmt.Errorf("%s must be between 0 and 1", key)
-	}
-	return parsed, nil
 }
