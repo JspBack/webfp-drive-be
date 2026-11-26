@@ -38,8 +38,6 @@ const minimumPasswordLength = 8
 // @Param        request  body      credentialsRequest  true  "Registration details"
 // @Success      201      {object}  verificationResponse
 // @Failure      400      {object}  map[string]string
-// @Failure      409      {object}  map[string]string  "Email already registered"
-// @Failure      500      {object}  map[string]string
 // @Router       /api/v1/auth/register [post].
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
@@ -93,9 +91,6 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 // @Param        request  body      credentialsRequest  true  "Login credentials"
 // @Success      200      {object}  authResponse
 // @Failure      400      {object}  map[string]string
-// @Failure      401      {object}  map[string]string             "Invalid credentials"
-// @Failure      403      {object}  verificationRequiredResponse  "Email not verified"
-// @Failure      500      {object}  map[string]string
 // @Router       /api/v1/auth/login [post].
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
@@ -138,8 +133,6 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 // @Param        request  body      refreshRequest  true  "Refresh token"
 // @Success      200      {object}  authResponse
 // @Failure      400      {object}  map[string]string
-// @Failure      401      {object}  map[string]string  "Refresh token is invalid or expired"
-// @Failure      500      {object}  map[string]string
 // @Router       /api/v1/auth/refresh [post].
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 	var req refreshRequest
@@ -171,9 +164,7 @@ func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
 // @Tags         auth
 // @Produce      json
 // @Security     BearerAuth
-// @Success      204  "Session revoked"
-// @Failure      401  {object}  map[string]string
-// @Failure      500  {object}  map[string]string
+// @Response     default  "Session revoked or the request failed"
 // @Router       /api/v1/auth/logout [post].
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	token, _ := authhelper.SessionToken(r.Context())
@@ -191,9 +182,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 // @Produce   json
 // @Security  BearerAuth
 // @Success   200  {object}  store.User
-// @Failure   401  {object}  map[string]string
 // @Failure   404  {object}  map[string]string
-// @Failure   500  {object}  map[string]string
 // @Router    /api/v1/users/me [get].
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
@@ -225,8 +214,6 @@ type storageUsageResponse struct {
 // @Produce      json
 // @Security     BearerAuth
 // @Success      200  {object}  storageUsageResponse
-// @Failure      401  {object}  map[string]string
-// @Failure      500  {object}  map[string]string
 // @Router       /api/v1/users/me/usage [get].
 func (h *Handler) StorageUsage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
