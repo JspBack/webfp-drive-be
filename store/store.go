@@ -49,8 +49,9 @@ func New(cfg cfg.Config) *Store {
 			refreshLifetime: cfg.RefreshTokenLifetime,
 		},
 		Shares: &ShareStore{
-			cache: clients.Redis,
-			files: files,
+			cache:       clients.Redis,
+			files:       files,
+			archiveWake: make(chan struct{}, 1),
 		},
 		clients: clients,
 	}

@@ -77,7 +77,7 @@ func TestParseMultipartRejectsOversizedAndDuplicateFields(t *testing.T) {
 		{
 			name: "oversized file",
 			body: func(writer *multipart.Writer) {
-				writeTestFile(t, writer, "file", "sample.txt", "too large")
+				writeTestFile(t, writer, "sample.txt", "too large")
 			},
 			want: uploadhelper.ErrFileTooLarge,
 		},
@@ -90,7 +90,7 @@ func TestParseMultipartRejectsOversizedAndDuplicateFields(t *testing.T) {
 				if err := writer.WriteField("folder_id", ""); err != nil {
 					t.Fatal(err)
 				}
-				writeTestFile(t, writer, "file", "sample.txt", "content")
+				writeTestFile(t, writer, "sample.txt", "content")
 			},
 		},
 	}
@@ -122,9 +122,9 @@ func multipartRequest(t *testing.T, write func(*multipart.Writer)) *http.Request
 	return request
 }
 
-func writeTestFile(t *testing.T, writer *multipart.Writer, field, filename, content string) {
+func writeTestFile(t *testing.T, writer *multipart.Writer, filename, content string) {
 	t.Helper()
-	part, createErr := writer.CreateFormFile(field, filename)
+	part, createErr := writer.CreateFormFile("file", filename)
 	if createErr != nil {
 		t.Fatal(createErr)
 	}

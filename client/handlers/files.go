@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -90,30 +89,12 @@ func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 		}
 		folderID = &id
 	}
-	if _, seekErr := upload.File.Seek(0, io.SeekStart); seekErr != nil {
-		h.internalError(w, r, "rewind uploaded file", seekErr)
+	file, status, message := h.storeUploadedFile(r, userID, folderID, upload)
+	if message != "" {
+		httphelper.Error(w, status, message)
 		return
 	}
-	file, err := h.store.Files.Upload(
-		r.Context(), userID, folderID, upload.Filename, upload.ContentType, upload.Size, upload.File,
-	)
-	if err != nil {
-		if errors.Is(err, store.ErrFolderNotFound) {
-			httphelper.Error(w, http.StatusNotFound, "folder not found")
-			return
-		}
-		if errors.Is(err, store.ErrStorageLimitExceeded) {
-			httphelper.Error(w, http.StatusRequestEntityTooLarge, "this upload would exceed your storage plan limit")
-			return
-		}
-		if errors.Is(err, store.ErrSystemLocked) {
-			httphelper.Error(w, http.StatusServiceUnavailable, "system storage limit reached; file operations are temporarily locked")
-			return
-		}
-		h.internalError(w, r, "create file upload", err)
-		return
-	}
-	httphelper.JSON(w, http.StatusCreated, file)
+	httphelper.JSON(w, status, file)
 }
 
 // ListFiles godoc

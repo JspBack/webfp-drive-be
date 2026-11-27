@@ -38,11 +38,13 @@ return new_count
 
 func (ss *ShareStore) SharedDownload(ctx context.Context, token, password string) (*File, io.ReadCloser, error) {
 	tokenHash := sha256.Sum256([]byte(token))
-	fields, err := ss.cache.HGetAll(ctx, shareRedisKey(tokenHash)).Result()
+	fields, err := ss.shareFields(ctx, shareRedisKey(tokenHash),
+		"id", "owner_id", "file_id", "expires_at", "max_downloads", "password_hash", "status", "archive_name", "archive_size",
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load share from Redis: %w", err)
 	}
-	if len(fields) == 0 {
+	if len(fields) == 0 || shareStatus(fields) != readyStatus {
 		return nil, nil, ErrShareUnavailable
 	}
 
@@ -75,15 +77,9 @@ func (ss *ShareStore) SharedDownload(ctx context.Context, token, password string
 		}
 	}
 
-	file, err := ss.files.Get(ctx, ownerID, fileID)
+	file, err := ss.sharedObject(ctx, ownerID, fileID, shareID, fields)
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return nil, nil, ErrShareUnavailable
-		}
-		return nil, nil, fmt.Errorf("load shared file: %w", err)
-	}
-	if file.Status != "ready" {
-		return nil, nil, ErrShareUnavailable
+		return nil, nil, err
 	}
 
 	object, err := ss.files.s3.GetObject(ctx, &s3.GetObjectInput{
@@ -110,6 +106,28 @@ func (ss *ShareStore) SharedDownload(ctx context.Context, token, password string
 		return nil, nil, errors.Join(ErrShareUnavailable, closeObjectError(closeErr))
 	}
 	return file, object.Body, nil
+}
+
+func (ss *ShareStore) sharedObject(ctx context.Context, ownerID, fileID, shareID uuid.UUID, fields map[string]string) (*File, error) {
+	if name := fields["archive_name"]; name != "" {
+		size, err := strconv.ParseInt(fields["archive_size"], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("parse archive size: %w", err)
+		}
+		return &File{Filename: name, ContentType: "application/zip", SizeBytes: size, objectKey: archiveObjectKey(shareID)}, nil
+	}
+	file, err := ss.files.Get(ctx, ownerID, fileID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrShareUnavailable
+		}
+		return nil, fmt.Errorf("load shared file: %w", err)
+	}
+	if file.Status != readyStatus {
+		return nil, ErrShareUnavailable
+	}
+
+	return file, nil
 }
 
 func closeObjectError(err error) error {

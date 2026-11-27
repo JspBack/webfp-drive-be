@@ -57,6 +57,7 @@ type createShareResponse struct {
 	ID        string    `json:"id"`
 	ExpiresAt time.Time `json:"expires_at"`
 	URL       string    `json:"url"`
+	Status    string    `json:"status"`
 }
 
 // CreateShare godoc
@@ -125,7 +126,7 @@ func (h *Handler) CreateShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httphelper.JSON(w, http.StatusCreated, createShareResponse{
-		ID: share.ID.String(), ExpiresAt: share.ExpiresAt, URL: shareURL,
+		ID: share.ID.String(), ExpiresAt: share.ExpiresAt, URL: shareURL, Status: share.Status,
 	})
 }
 
@@ -133,6 +134,7 @@ type shareListItemResponse struct {
 	ID            string    `json:"id"`
 	FileID        string    `json:"file_id"`
 	Filename      string    `json:"filename"`
+	Status        string    `json:"status"`
 	URL           string    `json:"url"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	MaxDownloads  int64     `json:"max_downloads"`
@@ -167,15 +169,20 @@ func (h *Handler) ListShares(w http.ResponseWriter, r *http.Request) {
 		if share.Token == "" {
 			continue
 		}
-		shareURL, urlErr := httphelper.AbsoluteURL(h.publicScheme, host, "/api/v1/shares/"+share.Token)
-		if urlErr != nil {
-			h.internalError(w, r, "build public share URL", urlErr)
-			return
+		var shareURL string
+		if share.Status == "ready" {
+			var urlErr error
+			shareURL, urlErr = httphelper.AbsoluteURL(h.publicScheme, host, "/api/v1/shares/"+share.Token)
+			if urlErr != nil {
+				h.internalError(w, r, "build public share URL", urlErr)
+				return
+			}
 		}
 		items = append(items, shareListItemResponse{
 			ID:            share.ID.String(),
 			FileID:        share.FileID.String(),
 			Filename:      share.Filename,
+			Status:        share.Status,
 			URL:           shareURL,
 			ExpiresAt:     share.ExpiresAt,
 			MaxDownloads:  share.MaxDownloads,

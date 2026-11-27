@@ -13,6 +13,7 @@ import (
 )
 
 type Mailer interface {
+	Enabled() bool
 	SendVerification(ctx context.Context, req mail.VerificationRequest) error
 }
 
@@ -26,6 +27,7 @@ type Handler struct {
 	githubOAuth         *authhelper.GitHubOAuth
 	googleOAuth         *authhelper.GoogleOAuth
 	mail                Mailer
+	batchUploads        chan struct{}
 }
 
 func New(
@@ -52,6 +54,7 @@ func New(
 		githubOAuth:         githubOAuth,
 		googleOAuth:         googleOAuth,
 		mail:                mailer,
+		batchUploads:        make(chan struct{}, maxConcurrentUploadBatches),
 	}
 }
 

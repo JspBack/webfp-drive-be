@@ -140,6 +140,10 @@ func (c *Client) RegisterRoutes(mux *http.ServeMux) {
 	c.registerRoutes(mux)
 }
 
+func (c *Client) StartArchiveWorker(ctx context.Context) {
+	c.Store.Shares.RunArchiveWorker(ctx, c.log, c.mailer.SendShareReady)
+}
+
 func (c *Client) Shutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), c.ShutdownTimeout)
 	defer cancel()

@@ -70,33 +70,12 @@ func (h *Handler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 		httphelper.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if strings.TrimSpace(req.Name) == "" {
-		httphelper.Error(w, http.StatusBadRequest, "folder name is required")
+	result := h.createFolder(r, userID, req)
+	if result.Error != "" {
+		httphelper.Error(w, result.status, result.Error)
 		return
 	}
-	var parentID *uuid.UUID
-	if req.ParentID != nil {
-		id, err := uuid.Parse(*req.ParentID)
-		if err != nil {
-			httphelper.Error(w, http.StatusBadRequest, "invalid parent_id")
-			return
-		}
-		parentID = &id
-	}
-	folder, err := h.store.Folders.Create(r.Context(), userID, parentID, req.Name)
-	if err != nil {
-		if storehelper.IsUniqueViolation(err) {
-			httphelper.Error(w, http.StatusConflict, "folder with this name already exists")
-			return
-		}
-		if errors.Is(err, store.ErrFolderParentNotFound) {
-			httphelper.Error(w, http.StatusNotFound, "parent folder not found")
-			return
-		}
-		h.internalError(w, r, "create folder", err)
-		return
-	}
-	httphelper.JSON(w, http.StatusCreated, folder)
+	httphelper.JSON(w, http.StatusCreated, result.Folder)
 }
 
 // ListFolders godoc
@@ -237,15 +216,12 @@ func (h *Handler) DeleteFolder(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.store.Folders.Delete(r.Context(), userID, folderID); err != nil {
-		if errors.Is(err, store.ErrFolderNotEmpty) {
-			httphelper.Error(w, http.StatusConflict, "folder must be empty before deletion")
-			return
-		}
-		h.folderError(w, r, "delete folder", err)
+	status, message := h.deleteFolder(r, userID, folderID)
+	if message != "" {
+		httphelper.Error(w, status, message)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(status)
 }
 
 func (h *Handler) folderError(w http.ResponseWriter, r *http.Request, operation string, err error) {

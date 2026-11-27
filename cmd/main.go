@@ -35,6 +35,7 @@ func main() {
 	defer stop()
 
 	go cl.StartUnverifiedUserCleanup(ctx)
+	go cl.StartArchiveWorker(ctx)
 
 	go func() {
 		<-ctx.Done()

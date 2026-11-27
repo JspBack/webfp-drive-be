@@ -16,6 +16,9 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+const readyStatus = "ready"
+const revokedArchive = 2
+
 var (
 	ErrShareUnavailable      = errors.New("share is unavailable")
 	ErrSharePasswordRequired = errors.New("share password is required")
@@ -28,12 +31,14 @@ type Share struct {
 	ID        uuid.UUID `json:"id"`
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+	Status    string    `json:"status"`
 }
 
 type ShareListItem struct {
 	ID            uuid.UUID `json:"id"`
 	FileID        uuid.UUID `json:"file_id"`
 	Filename      string    `json:"filename"`
+	Status        string    `json:"status"`
 	Token         string    `json:"token"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	MaxDownloads  int64     `json:"max_downloads"`
@@ -42,17 +47,33 @@ type ShareListItem struct {
 }
 
 type ShareStore struct {
-	cache *redis.Client
-	files *FileStore
+	cache       *redis.Client
+	files       *FileStore
+	archiveWake chan struct{}
 }
 
 const revokeShareScript = `
 if redis.call("HGET", KEYS[1], "owner_id") ~= ARGV[1] then
 	return 0
 end
+if redis.call("HGET", KEYS[1], "archive_name") then
+	redis.call("ZADD", KEYS[3], ARGV[2], ARGV[3])
+	redis.call("DEL", KEYS[1], KEYS[2])
+	return 2
+end
 redis.call("DEL", KEYS[1], KEYS[2])
 return 1
 `
+
+func validateShareOptions(expiresAt time.Time, maxDownloads *int64) error {
+	if !expiresAt.After(time.Now()) {
+		return fmt.Errorf("%w: expiry must be in the future", ErrInvalidShareOptions)
+	}
+	if maxDownloads != nil && *maxDownloads <= 0 {
+		return fmt.Errorf("%w: maximum downloads must be positive", ErrInvalidShareOptions)
+	}
+	return nil
+}
 
 func (ss *ShareStore) CreateShare(
 	ctx context.Context,
@@ -61,27 +82,34 @@ func (ss *ShareStore) CreateShare(
 	maxDownloads *int64,
 	password string,
 ) (*Share, error) {
-	if !expiresAt.After(time.Now()) {
-		return nil, fmt.Errorf("%w: expiry must be in the future", ErrInvalidShareOptions)
-	}
-	if maxDownloads != nil && *maxDownloads <= 0 {
-		return nil, fmt.Errorf("%w: maximum downloads must be positive", ErrInvalidShareOptions)
+	if err := validateShareOptions(expiresAt, maxDownloads); err != nil {
+		return nil, err
 	}
 	file, err := ss.files.Get(ctx, ownerID, fileID)
 	if err != nil {
 		return nil, fmt.Errorf("load file for sharing: %w", err)
 	}
-	if file.Status != "ready" {
+	if file.Status != readyStatus {
 		return nil, ErrShareFileNotReady
 	}
+	return ss.createShare(ctx, ownerID, fileID, expiresAt, maxDownloads, password, nil)
+}
 
+func (ss *ShareStore) createShare(
+	ctx context.Context,
+	ownerID, fileID uuid.UUID,
+	expiresAt time.Time,
+	maxDownloads *int64,
+	password string,
+	archive *folderArchive,
+) (*Share, error) {
 	randomToken := make([]byte, 32)
 	if _, randomErr := rand.Read(randomToken); randomErr != nil {
 		return nil, fmt.Errorf("generate share token: %w", randomErr)
 	}
 	token := base64.RawURLEncoding.EncodeToString(randomToken)
 	tokenHash := sha256.Sum256([]byte(token))
-	share := &Share{ID: uuid.New(), Token: token, ExpiresAt: expiresAt}
+	share := &Share{ID: uuid.New(), Token: token, ExpiresAt: expiresAt, Status: readyStatus}
 
 	passwordHash := ""
 	if password != "" {
@@ -97,15 +125,23 @@ func (ss *ShareStore) CreateShare(
 		maxDownloadsValue = *maxDownloads
 	}
 	ttl := time.Until(expiresAt)
+	if ttl <= 0 {
+		return nil, fmt.Errorf("%w: expiry must be in the future", ErrInvalidShareOptions)
+	}
+	lifetime := ttl
+	if archive != nil {
+		ttl = archivePendingTTL
+		share.ExpiresAt = time.Now().Add(ttl)
+	}
 	shareKey := shareRedisKey(tokenHash)
 	idKey := shareIDRedisKey(share.ID)
-	_, err = ss.cache.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+	_, err := ss.cache.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 		pipe.HSet(ctx, shareKey,
 			"id", share.ID.String(),
 			"owner_id", ownerID.String(),
 			"file_id", fileID.String(),
 			"token", token,
-			"expires_at", expiresAt.UnixMilli(),
+			"expires_at", share.ExpiresAt.UnixMilli(),
 			"max_downloads", maxDownloadsValue,
 			"download_count", 0,
 			"password_hash", passwordHash,
@@ -113,13 +149,30 @@ func (ss *ShareStore) CreateShare(
 		pipe.PExpire(ctx, shareKey, ttl)
 		pipe.Set(ctx, idKey, shareKey, ttl)
 		pipe.SAdd(ctx, shareOwnerRedisKey(ownerID), share.ID.String())
+		if archive != nil {
+			share.Status = "preparing"
+			pipe.HSet(ctx, shareKey,
+				"status", share.Status,
+				"archive_name", archive.name,
+				"archive_entries", archive.entries,
+				"archive_email", archive.delivery.Email,
+				"archive_link", archive.delivery.LinkPrefix+token,
+				"archive_lifetime_ms", lifetime.Milliseconds(),
+			)
+			pipe.ZAdd(ctx, archiveJobsKey, redis.Z{Score: float64(time.Now().UnixMilli()), Member: share.ID.String()})
+			pipe.ZAdd(ctx, archiveCleanupKey, redis.Z{Score: float64(share.ExpiresAt.UnixMilli()), Member: share.ID.String()})
+		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("save share in Redis: %w", err)
 	}
+	if archive != nil {
+		ss.wakeArchiveWorker()
+	}
 	return share, nil
 }
+
 func (ss *ShareStore) ListShares(ctx context.Context, ownerID uuid.UUID) ([]ShareListItem, error) {
 	ownerKey := shareOwnerRedisKey(ownerID)
 	rawIDs, err := ss.cache.SMembers(ctx, ownerKey).Result()
@@ -144,7 +197,10 @@ func (ss *ShareStore) ListShares(ctx context.Context, ownerID uuid.UUID) ([]Shar
 			}
 			return nil, fmt.Errorf("lookup share: %w", getErr)
 		}
-		fields, hashErr := ss.cache.HGetAll(ctx, shareKey).Result()
+		fields, hashErr := ss.shareFields(ctx, shareKey,
+			"id", "owner_id", "file_id", "token", "expires_at", "max_downloads",
+			"download_count", "password_hash", "status", "archive_name",
+		)
 		if hashErr != nil {
 			return nil, fmt.Errorf("load share: %w", hashErr)
 		}
@@ -158,7 +214,9 @@ func (ss *ShareStore) ListShares(ctx context.Context, ownerID uuid.UUID) ([]Shar
 			continue
 		}
 		items = append(items, item)
-		fileIDs = append(fileIDs, item.FileID)
+		if item.Filename == "" {
+			fileIDs = append(fileIDs, item.FileID)
+		}
 	}
 	if len(stale) > 0 {
 		_ = ss.cache.SRem(ctx, ownerKey, stale...).Err()
@@ -169,7 +227,9 @@ func (ss *ShareStore) ListShares(ctx context.Context, ownerID uuid.UUID) ([]Shar
 		return nil, err
 	}
 	for i := range items {
-		items[i].Filename = filenames[items[i].FileID]
+		if items[i].Filename == "" {
+			items[i].Filename = filenames[items[i].FileID]
+		}
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].ExpiresAt.Equal(items[j].ExpiresAt) {
@@ -204,6 +264,8 @@ func parseShareListItem(fields map[string]string) (ShareListItem, error) {
 	return ShareListItem{
 		ID:            shareID,
 		FileID:        fileID,
+		Filename:      fields["archive_name"],
+		Status:        shareStatus(fields),
 		Token:         fields["token"],
 		ExpiresAt:     time.UnixMilli(expiresMillis),
 		MaxDownloads:  maxDownloads,
@@ -222,7 +284,7 @@ func (ss *ShareStore) RevokeShare(ctx context.Context, ownerID, shareID uuid.UUI
 		return fmt.Errorf("lookup share in Redis: %w", err)
 	}
 	result, err := ss.cache.Eval(ctx, revokeShareScript,
-		[]string{shareKey, idKey}, ownerID.String(),
+		[]string{shareKey, idKey, archiveCleanupKey}, ownerID.String(), time.Now().UnixMilli(), shareID.String(),
 	).Int64()
 	if err != nil {
 		return fmt.Errorf("revoke share in Redis: %w", err)
@@ -231,17 +293,8 @@ func (ss *ShareStore) RevokeShare(ctx context.Context, ownerID, shareID uuid.UUI
 		return ErrNotFound
 	}
 	_ = ss.cache.SRem(ctx, shareOwnerRedisKey(ownerID), shareID.String()).Err()
+	if result == revokedArchive {
+		ss.wakeArchiveWorker()
+	}
 	return nil
-}
-
-func shareRedisKey(tokenHash [sha256.Size]byte) string {
-	return "share:" + base64.RawURLEncoding.EncodeToString(tokenHash[:])
-}
-
-func shareIDRedisKey(id uuid.UUID) string {
-	return "share-id:" + id.String()
-}
-
-func shareOwnerRedisKey(ownerID uuid.UUID) string {
-	return "share-owner:" + ownerID.String()
 }

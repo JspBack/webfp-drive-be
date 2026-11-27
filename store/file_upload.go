@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -14,6 +15,8 @@ import (
 
 	storehelper "github.com/JspBack/webfp-drive/helper/store"
 )
+
+const uploadCleanupTimeout = 15 * time.Second
 
 func (fs *FileStore) Upload(
 	ctx context.Context,
@@ -82,27 +85,22 @@ func (fs *FileStore) Upload(
 		file.ID, ownerID,
 	))
 	if err != nil {
-		_, deleteErr := fs.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
-			Bucket: aws.String(fs.bucket),
-			Key:    aws.String(file.objectKey),
-		})
-		if deleteErr != nil {
-			err = errors.Join(err, fmt.Errorf("clean up uploaded object: %w", deleteErr))
-		}
-		return nil, errors.Join(fmt.Errorf("mark uploaded file ready: %w", err), fs.deleteMetadata(ctx, file.ID, ownerID))
+		return nil, fs.abortUpload(ctx, file, ownerID, fmt.Errorf("mark uploaded file ready: %w", err))
 	}
 	return updated, nil
 }
 
 func (fs *FileStore) abortUpload(ctx context.Context, file *File, ownerID uuid.UUID, uploadErr error) error {
-	_, deleteErr := fs.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), uploadCleanupTimeout)
+	defer cancel()
+	_, deleteErr := fs.s3.DeleteObject(cleanupCtx, &s3.DeleteObjectInput{
 		Bucket: aws.String(fs.bucket),
 		Key:    aws.String(file.objectKey),
 	})
 	return errors.Join(
 		uploadErr,
 		wrapCleanupError("delete incomplete file object", deleteErr),
-		fs.deleteMetadata(ctx, file.ID, ownerID),
+		fs.deleteMetadata(cleanupCtx, file.ID, ownerID),
 	)
 }
 
