@@ -58,9 +58,6 @@ func (fs *FileStore) Upload(
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, ErrStorageLimitExceeded) {
-			return nil, fmt.Errorf("%w: limit is %d bytes", ErrStorageLimitExceeded, fs.storageLimit)
-		}
 		if storehelper.IsForeignKeyViolation(err, "files_folder_owner_fk") {
 			return nil, ErrFolderNotFound
 		}
@@ -97,30 +94,6 @@ func (fs *FileStore) Upload(
 	return updated, nil
 }
 
-func (fs *FileStore) reserveQuota(ctx context.Context, tx pgx.Tx, ownerID uuid.UUID, sizeBytes int64) error {
-	if fs.storageLimit <= 0 {
-		return nil
-	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), 0)`, ownerID.String()); err != nil {
-		return fmt.Errorf("lock storage usage: %w", err)
-	}
-	var used int64
-	if err := tx.QueryRow(ctx,
-		`SELECT COALESCE(SUM(size_bytes), 0) FROM `+fs.table("files")+` WHERE owner_id = $1`,
-		ownerID,
-	).Scan(&used); err != nil {
-		return fmt.Errorf("read storage usage: %w", err)
-	}
-	if used+sizeBytes > fs.storageLimit {
-		return ErrStorageLimitExceeded
-	}
-	return nil
-}
-
-func (fs *FileStore) StorageLimit() int64 {
-	return fs.storageLimit
-}
-
 func (fs *FileStore) abortUpload(ctx context.Context, file *File, ownerID uuid.UUID, uploadErr error) error {
 	_, deleteErr := fs.s3.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(fs.bucket),
@@ -133,16 +106,6 @@ func (fs *FileStore) abortUpload(ctx context.Context, file *File, ownerID uuid.U
 	)
 }
 
-func (fs *FileStore) Usage(ctx context.Context, ownerID uuid.UUID) (int64, int64, error) {
-	var usedBytes, fileCount int64
-	if err := fs.db.QueryRow(ctx,
-		`SELECT COALESCE(SUM(size_bytes), 0), COUNT(*) FROM `+fs.table("files")+` WHERE owner_id = $1`,
-		ownerID,
-	).Scan(&usedBytes, &fileCount); err != nil {
-		return 0, 0, fmt.Errorf("read storage usage: %w", err)
-	}
-	return usedBytes, fileCount, nil
-}
 func (fs *FileStore) checkSystemLock(ctx context.Context, tx pgx.Tx) error {
 	if fs.systemStorageLimit <= 0 {
 		return nil

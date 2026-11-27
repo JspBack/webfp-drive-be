@@ -103,9 +103,7 @@ func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, store.ErrStorageLimitExceeded) {
-			limit := h.store.Files.StorageLimit()
-			httphelper.Error(w, http.StatusRequestEntityTooLarge,
-				fmt.Sprintf("storage limit exceeded: this file would pass your %d byte limit", limit))
+			httphelper.Error(w, http.StatusRequestEntityTooLarge, "this upload would exceed your storage plan limit")
 			return
 		}
 		if errors.Is(err, store.ErrSystemLocked) {

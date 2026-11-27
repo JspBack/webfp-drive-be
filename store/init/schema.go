@@ -55,6 +55,7 @@ func createSchema(ctx context.Context, db *pgxpool.Pool, schema string) error {
 			email TEXT,
 			name TEXT NOT NULL DEFAULT '',
 			email_verified BOOLEAN NOT NULL DEFAULT true,
+			storage_plan TEXT NOT NULL DEFAULT 'free' CHECK (storage_plan IN ('free', 'pro', 'admin')),
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
