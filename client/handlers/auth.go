@@ -201,13 +201,18 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	httphelper.JSON(w, http.StatusOK, user)
 }
 
+type storageUsageResponse struct {
+	store.StorageUsage
+	MaxFileBytes int64 `json:"max_file_bytes"`
+}
+
 // StorageUsage godoc
 // @Summary      Get storage usage
-// @Description  Reports the current user's stored bytes, file count, and storage quota.
+// @Description  Reports the current user's stored bytes, file count, storage quota, and per-file upload limit.
 // @Tags         users
 // @Produce      json
 // @Security     BearerAuth
-// @Success      200  {object}  store.StorageUsage
+// @Success      200  {object}  storageUsageResponse
 // @Router       /api/v1/users/me/usage [get].
 func (h *Handler) StorageUsage(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authhelper.AuthenticatedUserID(w, r)
@@ -219,7 +224,7 @@ func (h *Handler) StorageUsage(w http.ResponseWriter, r *http.Request) {
 		h.internalError(w, r, "get storage usage", err)
 		return
 	}
-	httphelper.JSON(w, http.StatusOK, usage)
+	httphelper.JSON(w, http.StatusOK, storageUsageResponse{StorageUsage: usage, MaxFileBytes: h.maxBatchFileSize()})
 }
 
 func (h *Handler) internalError(w http.ResponseWriter, r *http.Request, operation string, err error) {

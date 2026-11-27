@@ -16,9 +16,14 @@ import (
 
 const (
 	maxBatchUploadBytes        = 60 << 20
+	batchMultipartHeadroom     = 1 << 20
 	batchUploadWorkers         = 4
 	maxConcurrentUploadBatches = 4
 )
+
+func (h *Handler) maxBatchFileSize() int64 {
+	return min(h.maxFileSize, maxBatchUploadBytes-batchMultipartHeadroom)
+}
 
 type uploadBatchResult struct {
 	Error string `json:"error,omitempty"`
@@ -58,7 +63,7 @@ func (h *Handler) UploadBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBatchUploadBytes)
-	files, err := uploadhelper.ParseBatch(r, h.maxFileSize)
+	files, err := uploadhelper.ParseBatch(r, h.maxBatchFileSize())
 	if err != nil {
 		var maxBytesErr *http.MaxBytesError
 		if errors.As(err, &maxBytesErr) || errors.Is(err, uploadhelper.ErrFileTooLarge) {
